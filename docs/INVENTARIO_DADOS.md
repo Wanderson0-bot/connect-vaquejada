@@ -1,0 +1,25 @@
+# Inventário de dados e limites de recuperação
+
+O Connect PDM tem três superfícies de persistência independentes. Não existe uma base única nem sincronização automática entre elas. A escolha do modo da aplicação não converte nem migra automaticamente dados de uma superfície para outra.
+
+| Superfície | Conteúdo e autoridade | Relações e proteção | Backup/recuperação disponível | Estado/evidência |
+|---|---|---|---|---|
+| IndexedDB (`pdm-local`) | Dados locais/cache e filas do navegador; contém stores de eventos, inscrições, resultados, auditoria, reservas, cache remoto, fila Supabase, fila/coordenador, versões e estado de pista. Cada navegador/aparelho tem sua própria cópia. | Transações e vínculos são implementados na aplicação; não equivalem a isolamento entre parques, backup do host ou cópia para outros aparelhos. Filas podem conter operações pendentes/bloqueadas. | Exportação/importação JSON da interface cobre os dados operacionais documentados para esse fluxo; não captura o arquivo SQLite do coordenador nem é backup remoto. Não há fluxo automatizado para exportar/restaurar todas as stores técnicas/outboxes do navegador. | Testes automatizados validam partes da lógica e parser; não provam sobrevivência a falha real de navegador/dispositivo, recuperação de todas as stores ou restauração interaparelho. |
+| Coordenador LAN (SQLite) | Autoridade compartilhada do modo local em rede: registros e versões, log idempotente de operações/respostas, conflitos, tentativas adulteradas registradas e migrações. Uma instância é associada a um parque. | SQLite local com WAL e `synchronous=FULL`; entidades são payloads JSON e não há FK relacional que garanta todas as relações de domínio. Versões e validação ficam no serviço. A inicialização mantém `PRAGMA user_version=2` e recusa esquemas futuros. | `npm run coordinator:backup -- backup <origem.sqlite> <destino.sqlite>` cria snapshot consistente e manifesto lateral. `verify` checa hash, integridade, esquema, contagens e migrações. `restore` só aceita novo destino, sem sobrescrever. Veja [COORDENADOR_LOCAL.md](./COORDENADOR_LOCAL.md). | Testes de integração isolados criam dados fictícios temporários, geram/verificam/restauram backup, detectam alteração do arquivo e exercitam escrita/reinício da restauração. Ensaio físico e cópia fora do host continuam pendentes. |
+| Supabase (Auth/PostgreSQL) | Autoridade do modo conectado: identidade e sessão Auth, dados remotos de parques/eventos/inscrições/resultados, auditoria, reservas e operações administrativas existentes nas migrations. | PostgreSQL e políticas/RPCs das migrations são responsáveis pela autorização e integridade remotas. O repositório local não revela se as migrations foram aplicadas ao projeto real. | Não há backup ou restauração Supabase implementado neste projeto. A exportação CSV/JSON da interface é um artefato funcional, não backup completo do Postgres/Auth. Use os mecanismos oficiais de backup/recuperação do projeto e valide-os separadamente. | Nenhum banco remoto foi consultado, migrado, alterado ou restaurado como parte deste trabalho. Integração/coerência com IndexedDB e SQLite não existe. |
+
+## Relações e fluxos que não devem ser presumidos
+
+- A fila IndexedDB do navegador envia operações ao coordenador quando configurada; isso não transforma o IndexedDB em réplica integral do SQLite nem substitui uma exportação do próprio banco coordenador.
+- O coordenador não sincroniza para Supabase quando a internet retorna. SQLite e Postgres são autoridades de modos distintos.
+- Restaurar o SQLite não recupera cache, fila offline ou sessão de um navegador; recuperar JSON do navegador não restaura operações/conflictos do coordenador.
+- A presença de migrations SQL no repositório não prova aplicação, versão ou conteúdo de um Supabase remoto.
+- `integrity_check`, `foreign_key_check` (atualmente sem integridade referencial de domínio garantida por FK), contagens e SHA-256 detectam algumas formas de corrupção; não são criptografia, imutabilidade contra quem controla os arquivos, prova semântica de todos os vínculos nem cópia externa.
+
+## Recuperação operacional do SQLite
+
+Mantenha o banco e seu manifesto juntos, restrinja ambos por ACL do host e retenha cópias protegidas fora do computador do coordenador. O utilitário não agenda cópias, não envia a destino remoto, não cifra nem define retenção. Para recuperação, verifique o par, restaure para uma pasta isolada, confira os dados e só então, com o serviço parado, aponte `CONNECT_PDM_DB` à instância restaurada. Valide `/api/health`, snapshot autenticado, fila/conflitos e uma gravação de teste antes de retomar operação. O teste automatizado de restauração não substitui essa homologação em equipamento separado.
+
+## Bloqueios mantidos
+
+Não foi feita migration remota, acesso a credenciais, exposição de dados reais ou teste de produção. Permanecem bloqueados a sincronização SQLite↔Supabase, gravação de pista pelo protocolo, recuperação integral de IndexedDB, restauração Supabase e aprovação para evento oficial. Consulte [PLANO_HOMOLOGACAO_REAL.md](./PLANO_HOMOLOGACAO_REAL.md) para critérios pendentes.

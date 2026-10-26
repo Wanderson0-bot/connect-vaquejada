@@ -1,0 +1,14 @@
+{
+  "id": "/",
+  "name": "Connect Vaquejada",
+  "short_name": "Connect",
+  "lang": "pt-BR",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#E8D3B2",
+  "theme_color": "#3E2A1E",
+  "icons": [
+    { "src": "/favicon.jpeg", "sizes": "any", "type": "image/jpeg", "purpose": "any maskable" }
+  ]
+}

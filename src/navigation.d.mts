@@ -1,0 +1,17 @@
+export type OperationTab = "overview" | "entries" | "track" | "settings" | "park" | "audit" | "backup" | "network";
+export type ConnectView = "overview" | "parks" | "events" | "people" | "reconciliation" | "publications" | "platform";
+export function operationTabForPath(pathname: string): OperationTab | null;
+export function operationPathForTab(tab: OperationTab): string;
+export function operationUrlForTab(tab: OperationTab, currentUrl: string): URL;
+export function operationTabForArea(area: string | null): OperationTab | null;
+export function operationTabForLocation(pathname: string, area: string | null): OperationTab | null;
+export function isOperationPath(pathname: string): boolean;
+export function connectViewForPath(pathname: string): ConnectView | null;
+export function connectParkIdForPath(pathname: string): string | null;
+export function connectParkPath(parkId: string): string;
+export function connectPathForView(view: ConnectView): string;
+export function isConnectPath(pathname: string): boolean;
+export function isPublicEventsPath(pathname: string): boolean;
+export function isPublicParkPath(pathname: string): boolean;
+export type PublicRoute = { type: "events" | "not-found" } | { type: "event" | "park"; id: string };
+export function publicRouteForPath(pathname: string): PublicRoute;
