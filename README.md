@@ -1,5 +1,7 @@
 # Connect PDM
 
+Para escolher a área correta, entender o primeiro acesso, cadastrar o primeiro parque e seguir os passos operacionais, consulte o [Guia rápido do Connect](./docs/GUIA_RAPIDO.md).
+
 Aplicação web em português brasileiro para apoiar a gestão de vaquejadas Pé de Mourão. O repositório segue em desenvolvimento e não está aprovado para operação esportiva real.
 
 ## Stack disponível

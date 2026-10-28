@@ -508,8 +508,8 @@ export function ConnectAdminConsole({ context, onSignOut }: Props) {
       setManagerInviteLink(url.toString());
       const historyError = await refreshParkAudit(park.id);
       setNotice(historyError
-        ? `Convite criado; a auditoria não pôde ser atualizada: ${historyError}`
-        : `Convite individual válido até ${new Date(invitation.expires_at).toLocaleString("pt-BR")} .`);
+        ? `Convite criado, mas o sistema não envia email automaticamente. Copie o link e envie ao mesmo endereço convidado. A auditoria não pôde ser atualizada: ${historyError}`
+        : `Convite criado e válido até ${new Date(invitation.expires_at).toLocaleString("pt-BR")}. O sistema não envia email automaticamente; copie o link e envie ao mesmo endereço convidado.`);
     } catch (error) {
       setNotice(error instanceof Error ? error.message : "Falha ao criar convite administrativo.");
     } finally { setBusy(false); }
@@ -658,6 +658,12 @@ export function ConnectAdminConsole({ context, onSignOut }: Props) {
               <article className="connect-dashboard-metric"><span>Publicações</span><strong>{dashboardLoading ? "…" : dashboard?.publication_count == null ? "N/D" : dashboard.publication_count.toLocaleString("pt-BR")}</strong><small>{dashboard?.publication_count == null ? "Módulo de publicação indisponível" : "Total publicado"}</small></article>
             </div>
           </section>
+
+          {dashboard && dashboard.park_count === 0 && canProvision && <AdminStateCard
+            title="Comece cadastrando o primeiro parque"
+            action={<button className="primary" type="button" onClick={() => navigateAdminView("parks")}>Cadastrar primeiro parque</button>}
+          >O painel está conectado ao servidor e ainda não há parques cadastrados. Depois do cadastro, você poderá abrir o perfil do parque e organizar os eventos.
+          </AdminStateCard>}
 
           <section className="connect-dashboard-section" aria-labelledby="connect-system-status-title">
             <AdminSectionHeader id="connect-system-status-title" eyebrow="MONITORAMENTO" title="Estado do sistema" description="Apenas verificações confirmadas nesta consulta são marcadas como verificadas." actions={<button className="secondary" type="button" disabled={dashboardLoading} onClick={() => setDashboardRevision((revision) => revision + 1)}>Atualizar</button>} />
@@ -828,7 +834,7 @@ export function ConnectAdminConsole({ context, onSignOut }: Props) {
             auditError={parkAuditError}
             onCopyAreaLink={(area) => void copyParkAreaLink(area)}
           />}
-          {!parkRouteId && canProvision && !park && (
+          {!parkRouteId && canProvision && (
             <section className="card form-card">
               <h2>Cadastrar parque</h2>
               <p>O nome identifica o parque; cidade e UF diferenciam cadastros homônimos.</p>
@@ -943,8 +949,8 @@ export function ConnectAdminConsole({ context, onSignOut }: Props) {
                   setInviteLink(url.toString());
                   const auditError = await refreshParkAudit(park.id);
                   setNotice(auditError
-                    ? `Convite criado. Histórico indisponível: ${auditError}`
-                    : `Convite válido até ${new Date(invitation.expires_at).toLocaleString()}. Envie por canal confiável.`);
+                    ? `Convite criado, mas o sistema não envia email automaticamente. Copie o link e envie ao endereço convidado. Histórico indisponível: ${auditError}`
+                    : `Convite criado e válido até ${new Date(invitation.expires_at).toLocaleString()}. O sistema não envia email automaticamente; copie o link e envie ao endereço convidado.`);
                   setStaff(await listEventStaff(selectedEvent));
                 } catch (error) { setNotice(error instanceof Error ? error.message : "Falha ao criar convite."); }
                 finally { setBusy(false); }

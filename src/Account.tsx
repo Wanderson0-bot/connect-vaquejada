@@ -22,11 +22,11 @@ import {
   listParkMembers,
   acceptEventStaffInvitation,
 } from "./backend";
-import { PARK_ROLES } from "./permissions";
 import { clearCoordinatorSettings } from "./coordinator";
 import { BrazilianPhoneInput, BrazilianStateOptions } from "./BrazilFields";
 
 const INVITATION_KEY = "connect-pdm-pending-invitation";
+const EVENT_INVITATION_KEY = "connect-pdm-pending-event-invitation";
 const ConnectAdminConsole = lazy(() => import("./ConnectAdmin").then((module) => ({ default: module.ConnectAdminConsole })));
 
 type AccountProps = {
@@ -73,13 +73,11 @@ export function AccountGate({ children }: AccountProps) {
         setPlatformContext(null);
         return;
       }
-      const eventInvite = new URLSearchParams(window.location.search).get(
-        "eventInvite",
-      );
+      const eventInvite = localStorage.getItem(EVENT_INVITATION_KEY);
       if (eventInvite) {
         await acceptEventStaffInvitation(eventInvite);
         if (validationId !== accountValidation.current) return;
-        window.history.replaceState(null, "", window.location.pathname);
+        localStorage.removeItem(EVENT_INVITATION_KEY);
       }
       const invite = localStorage.getItem(INVITATION_KEY);
       if (invite) {
@@ -116,10 +114,21 @@ export function AccountGate({ children }: AccountProps) {
     }
   }
   useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const eventInvite = params.get("eventInvite");
+    if (eventInvite) {
+      localStorage.setItem(EVENT_INVITATION_KEY, eventInvite);
+      params.delete("eventInvite");
+      const query = params.toString();
+      window.history.replaceState(null, "", `${window.location.pathname}${query ? `?${query}` : ""}`);
+    }
     const invite = new URLSearchParams(window.location.search).get("invite");
     if (invite) {
       localStorage.setItem(INVITATION_KEY, invite);
-      window.history.replaceState(null, "", window.location.pathname);
+      const cleanParams = new URLSearchParams(window.location.search);
+      cleanParams.delete("invite");
+      const query = cleanParams.toString();
+      window.history.replaceState(null, "", `${window.location.pathname}${query ? `?${query}` : ""}`);
     }
     if (backendConfigured) void loadAccount();
   }, []);
@@ -163,8 +172,13 @@ export function AccountGate({ children }: AccountProps) {
     return () => subscription.unsubscribe();
   }, []);
   useEffect(() => {
-    if (authEntryRoute && session && park && !loading) window.location.replace("/operacao");
-  }, [authEntryRoute, session, park, loading]);
+    if (!authEntryRoute || !session || loading) return;
+    if (platformContext && ["platform_admin", "deployment", "support"].includes(platformContext.role)) {
+      window.location.replace("/connect");
+      return;
+    }
+    if (park) window.location.replace("/operacao");
+  }, [authEntryRoute, session, park, platformContext, loading]);
 
   async function handleSignOut() {
     accountValidation.current += 1;
@@ -188,8 +202,7 @@ export function AccountGate({ children }: AccountProps) {
   }
   const invitationMode = Boolean(
     !connectRoute &&
-      (new URLSearchParams(window.location.search).has("eventInvite") ||
-        new URLSearchParams(window.location.search).has("invite") ||
+      (localStorage.getItem(EVENT_INVITATION_KEY) ||
         localStorage.getItem(INVITATION_KEY)),
   );
 
@@ -289,8 +302,8 @@ export function AccountGate({ children }: AccountProps) {
         <div className="account-card card form-card">
           <h2>{canAccessPlatform ? "Acesso administrativo Connect" : "Acesso ainda não associado"}</h2>
           <p>{canAccessPlatform
-            ? "A área administrativa da plataforma fica no endereço /connect."
-            : "Esta conta não possui parque ou evento ativo. Solicite um convite à administração do parque ou da Connect Vaquejada."}</p>
+            ? "Sua conta tem acesso administrativo à plataforma. Abra o painel Connect para cadastrar e administrar parques."
+            : "Esta conta ainda não tem vínculo ativo com um parque ou evento. Peça à equipe responsável um convite de acesso."}</p>
           {error && (
             <div className="account-error" role="alert">
               {error}
@@ -322,12 +335,10 @@ export function AccountGate({ children }: AccountProps) {
         await requestPasswordReset(email);
       }}
       onAuthenticated={async (active) => {
-        const eventInvite = new URLSearchParams(window.location.search).get(
-          "eventInvite",
-        );
+        const eventInvite = localStorage.getItem(EVENT_INVITATION_KEY);
         if (eventInvite) {
           await acceptEventStaffInvitation(eventInvite);
-          window.history.replaceState(null, "", window.location.pathname);
+          localStorage.removeItem(EVENT_INVITATION_KEY);
         }
         const invite = localStorage.getItem(INVITATION_KEY);
         if (invite) {
@@ -399,9 +410,11 @@ function AuthForm({
       const created = await signUp(email, password);
       if (!created.session) {
         setMessage(
-          localStorage.getItem(INVITATION_KEY)
-            ? "Conta criada. Confirme o email e depois entre por este navegador para aceitar o convite do parque."
-            : "Conta criada. Confirme o email e depois entre por este link para ativar o convite do evento.",
+          localStorage.getItem(EVENT_INVITATION_KEY)
+            ? "Conta criada. Confirme o email enviado pelo Supabase. Depois volte a esta página e entre com o mesmo email; o convite ficará guardado neste navegador até ser validado."
+            : localStorage.getItem(INVITATION_KEY)
+              ? "Conta criada. Confirme o email enviado pelo Supabase. Depois volte a esta página e entre com o mesmo email; o convite ficará guardado neste navegador até ser validado."
+              : "Conta criada. Confirme o email enviado pelo Supabase e depois entre para continuar.",
         );
         setRegister(false);
         return;
@@ -435,7 +448,9 @@ function AuthForm({
             <p>
               {register
                 ? "Use o email que recebeu o convite para criar sua senha e ativar o acesso autorizado."
-                : "O acesso ao parque e ao evento depende de convite autorizado no servidor."}
+                : connectRoute
+                  ? "Entre com a conta autorizada da equipe Connect. O sistema confirma sua função antes de abrir o painel."
+                  : "Entre com sua conta Connect. Depois de validar suas permissões, o sistema abrirá a área disponível para você."}
             </p>
           </div>
         </div>
@@ -689,9 +704,7 @@ export function TeamManager({ park }: { park: ParkProfile }) {
         <div>
           <h2>Usuários do parque</h2>
           <p>
-            Crie acessos individuais para escritório, locução, pista e
-            responsáveis. Cada perfil entra com seu próprio email e pode acessar
-            a área correta do sistema.
+            Convide outro responsável do parque com acesso individual. O sistema gera um link, mas não envia o email automaticamente.
           </p>
         </div>
       </div>
@@ -706,17 +719,13 @@ export function TeamManager({ park }: { park: ParkProfile }) {
           try {
             const invitation = await createParkInvitation(
               String(form.get("email") || ""),
-              String(
-                form.get("role") || "office",
-              ) as ParkProfile["access_role"],
+              "park_manager",
             );
-            const url = new URL(window.location.href);
-            url.search = "";
-            url.hash = "";
+            const url = new URL("/entrar", window.location.origin);
             url.searchParams.set("invite", invitation.invitation_token);
             setInviteUrl(url.toString());
             setNotice(
-              `Convite válido até ${new Date(invitation.expires_at).toLocaleString()}. Envie este link ao destinatário por canal confiável.`,
+              `Convite criado e válido até ${new Date(invitation.expires_at).toLocaleString()}. O sistema não envia email automaticamente: copie o link abaixo e envie ao mesmo endereço convidado. A pessoa deve confirmar o email, criar a senha ou entrar e abrir o link neste navegador.`,
             );
             await refresh();
           } catch (error) {
@@ -733,30 +742,12 @@ export function TeamManager({ park }: { park: ParkProfile }) {
         <AccountField label="Email individual">
           <input name="email" type="email" required />
         </AccountField>
-        <AccountField label="Perfil do parque">
-          <select name="role" defaultValue="office">
-            {PARK_ROLES.map((role) => (
-              <option key={role} value={role}>
-                {role === "park_manager"
-                  ? "Responsável pelo parque"
-                  : role === "office"
-                    ? "Escritório"
-                    : role === "announcer"
-                      ? "Locução"
-                      : role === "judge"
-                        ? "Julgador"
-                        : "Operador de pista"}
-              </option>
-            ))}
-          </select>
-        </AccountField>
+        <p className="subtle">Este formulário convida apenas outro responsável do parque. A equipe de escritório, locução, julgamento e pista precisa de convites vinculados a um evento.</p>
         <button className="primary" disabled={busy}>
-          {busy ? "Criando…" : "Criar convite"}
+          {busy ? "Criando…" : "Criar convite de responsável"}
         </button>
       </form>
-      {inviteUrl && (
-        <textarea readOnly value={inviteUrl} aria-label="Link de convite" />
-      )}
+      {inviteUrl && <label className="field"><span>Link para copiar e enviar manualmente</span><textarea readOnly value={inviteUrl} aria-label="Link de convite" /></label>}
       {notice && <p role="status">{notice}</p>}
       <h3>Acessos</h3>
       <ul className="park-member-list">

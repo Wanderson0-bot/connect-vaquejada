@@ -82,7 +82,7 @@ export function PublicSite() {
       <section className="public-hero" aria-labelledby="public-home-title">
         <div className="public-hero-pattern" aria-hidden="true" />
         <div className="public-hero-content">
-          <span className="public-kicker"><span /> Tradição que segue em frente</span>
+          <span className="public-kicker"><span /> Bem Vindo(a)</span>
           <h1 id="public-home-title">TRADIÇÃO NA PISTA.<br /><em>CONEXÃO EM CADA RESULTADO.</em></h1>
           <p>Acompanhe os eventos e as informações divulgadas pelos parques em um só lugar.</p>
           <form className="public-search" role="search" onSubmit={submitSearch}>
