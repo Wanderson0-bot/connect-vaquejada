@@ -329,6 +329,7 @@ export function AccountGate({ children }: AccountProps) {
     <AuthForm
       error={error}
       message={message}
+      connectRoute={connectRoute}
       setError={setError}
       setMessage={setMessage}
       onReset={async (email) => {
@@ -363,6 +364,7 @@ function AuthForm({
   message,
   setError,
   setMessage,
+  connectRoute = false,
   onAuthenticated,
   onReset,
   invitationMode = false,
@@ -370,6 +372,7 @@ function AuthForm({
 }: {
   error: string;
   message: string;
+  connectRoute?: boolean;
   setError: (value: string) => void;
   setMessage: (value: string) => void;
   onAuthenticated: (session: AuthSession) => Promise<void>;
