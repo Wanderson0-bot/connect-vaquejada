@@ -265,9 +265,9 @@ test("dados históricos e eventos não recebem comandos de remoção na migratio
 
 test("public event pages use the public RPC and never render administrative park or participant fields", () => {
   assert.match(publicSite, /getPublicEvents\(\)/);
-  assert.match(publicSite, /Simbolo-Principal-Connect-Vaquejada\.png/);
+  assert.match(publicSite, /Simbolo-(?:Principal-)?Connect-Vaquejada\.png/);
   assert.match(publicSite, /publicRouteForPath/);
-  assert.match(publicSite, /Perfil p\\u00fablico do parque indispon\\u00edvel/);
+  assert.match(publicSite, /Perfil p(?:\\u00fa|ú)blico do parque indispon(?:\\u00ed|í)vel/);
   assert.match(app, /isPublicParkPath\(pathname\)/);
   assert.match(app, /lazy\(\(\) => import\("\.\/PublicSite"\)/);
   assert.match(app, /lazy\(\(\) => import\("\.\/TrackConsole"\)/);
