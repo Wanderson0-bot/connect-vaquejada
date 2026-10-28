@@ -23,6 +23,7 @@ const connectSource = await readFile(new URL("../src/ConnectAdmin.tsx", import.m
 const connectProfileSource = await readFile(new URL("../src/ConnectParkProfilePage.tsx", import.meta.url), "utf8");
 const backendSource = await readFile(new URL("../src/backend.ts", import.meta.url), "utf8");
 const accountSource = await readFile(new URL("../src/Account.tsx", import.meta.url), "utf8");
+const publicSiteSource = await readFile(new URL("../src/PublicSite.tsx", import.meta.url), "utf8");
 
 test("operational UI distinguishes local data and event selection states", () => {
   assert.match(appSource, /: !event \? \(/);
@@ -34,22 +35,29 @@ test("operational UI distinguishes local data and event selection states", () =>
 });
 
 test("rotas operacionais resolvem páginas e preservam atalhos da secretaria e pista", () => {
-  assert.equal(operationTabForPath("/"), "overview");
+  assert.equal(operationTabForPath("/"), null);
+  assert.equal(operationTabForPath("/operacao"), "overview");
+  assert.equal(operationTabForPath("/operacao/"), "overview");
   assert.equal(operationTabForPath("/operacao/inscricoes"), "entries");
   assert.equal(operationTabForPath("/operacao/pista"), "track");
   assert.equal(operationTabForArea("office"), "entries");
   assert.equal(operationTabForArea("announcer"), "track");
   assert.equal(operationTabForArea("operational"), "track");
   assert.equal(operationTabForArea("admin"), null);
-  assert.equal(operationTabForLocation("/", "office"), "entries");
-  assert.equal(operationTabForLocation("/", "announcer"), "track");
+  assert.equal(operationTabForLocation("/", "office"), null);
+  assert.equal(operationTabForLocation("/", "announcer"), null);
+  assert.equal(operationTabForLocation("/operacao", "office"), "entries");
+  assert.equal(operationTabForLocation("/operacao", "announcer"), "track");
   assert.equal(operationTabForLocation("/operacao/pista", "office"), "track");
+  assert.equal(operationPathForTab("overview"), "/operacao");
   assert.equal(operationPathForTab("track"), "/operacao/pista");
   const tabUrl = operationUrlForTab("track", "https://connect.test/?area=announcer&event=evt-1&invite=temporary#access_token=private");
   assert.equal(tabUrl.pathname, "/operacao/pista");
   assert.equal(tabUrl.search, "?event=evt-1");
   assert.equal(tabUrl.hash, "");
   assert.equal(isOperationPath("/operacao/invalida"), false);
+  assert.equal(isOperationPath("/"), false);
+  assert.equal(isOperationPath("/operacao"), true);
 });
 
 test("rotas Connect continuam separadas e /connect continua sendo o painel inicial", () => {
@@ -73,11 +81,20 @@ test("perfil administrativo do parque tem rota individual com retorno seguro à 
 });
 
 test("páginas públicas e áreas autenticadas permanecem em famílias de rota distintas", () => {
+  assert.deepEqual(publicRouteForPath("/"), { type: "home" });
+  assert.equal(isOperationPath("/"), false);
   assert.equal(isPublicEventsPath("/eventos"), true);
   assert.equal(isPublicEventsPath("/eventos/evento-publicado"), true);
   assert.equal(isPublicEventsPath("/eventos-privados"), false);
   assert.equal(isConnectPath("/operacao/pista"), false);
   assert.equal(isOperationPath("/connect"), false);
+  assert.match(appSource, /pathname === "\/"[\s\S]*?<PublicSite \/>/);
+  assert.doesNotMatch(publicSiteSource, /href="\/(?:connect|operacao)(?:\/|"|\?)/);
+  assert.doesNotMatch(publicSiteSource, /Area interna|Abrir painel|Acesso da equipe/i);
+  assert.match(accountSource, /if \(!backendConfigured\)[\s\S]*?Área protegida indisponível/);
+  assert.doesNotMatch(accountSource, /if \(!backendConfigured\)\s*return children/);
+  assert.match(accountSource, /setSession\(null\);\s*setPark\(null\);\s*setPlatformContext\(null\);/);
+  assert.match(backendSource, /As permissões reais não podem ser revalidadas offline/);
 });
 
 test("atualizar e voltar/avançar sincronizam a navegação sem contornar permissões", () => {

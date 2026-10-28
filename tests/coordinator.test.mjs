@@ -239,6 +239,66 @@ test("coordinator refuses to expose bearer-token traffic over insecure LAN by de
   }), /HTTPS é obrigatório/);
 });
 
+test("Render PORT takes precedence over the local coordinator port fallback", async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), "connect-pdm-render-port-"));
+  const previousPort = process.env.PORT;
+  const previousCoordinatorPort = process.env.CONNECT_PDM_PORT;
+  process.env.PORT = "0";
+  process.env.CONNECT_PDM_PORT = "8787";
+  const coordinator = createCoordinator({
+    dbPath: join(directory, "render-port.sqlite"), parkId: "park-render-port", host: "127.0.0.1", webRoot: directory,
+    operators: [{ userId: "9f05e57e-0c89-47a8-8456-9ae3a09ba77d", token: "render-port-test-token-with-at-least-32-characters", role: "park_manager", expiresAt: new Date(Date.now() + 60000).toISOString(), disabled: false }],
+  });
+  t.after(async () => {
+    await coordinator.close();
+    await rm(directory, { recursive: true, force: true });
+    if (previousPort === undefined) delete process.env.PORT; else process.env.PORT = previousPort;
+    if (previousCoordinatorPort === undefined) delete process.env.CONNECT_PDM_PORT; else process.env.CONNECT_PDM_PORT = previousCoordinatorPort;
+  });
+  const address = await coordinator.listen();
+  assert.notEqual(address.port, 8787);
+  assert.ok(address.port > 0);
+});
+
+test("Render TLS termination is explicit and does not bypass operator authentication or CORS allowlists", async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), "connect-pdm-render-proxy-"));
+  const previous = { proxyTls: process.env.CONNECT_PDM_TRUST_PROXY_TLS, origins: process.env.CONNECT_PDM_ALLOWED_ORIGINS, port: process.env.PORT };
+  process.env.CONNECT_PDM_TRUST_PROXY_TLS = "true";
+  process.env.CONNECT_PDM_ALLOWED_ORIGINS = "https://app.example.test";
+  process.env.PORT = "0";
+  const coordinator = createCoordinator({
+    dbPath: join(directory, "render-proxy.sqlite"), parkId: "park-render-proxy", host: "0.0.0.0", webRoot: directory,
+    operators: [{ userId: "9f05e57e-0c89-47a8-8456-9ae3a09ba77d", token: "render-proxy-test-token-with-at-least-32-characters", role: "park_manager", expiresAt: new Date(Date.now() + 60000).toISOString(), disabled: false }],
+  });
+  t.after(async () => {
+    await coordinator.close();
+    await rm(directory, { recursive: true, force: true });
+    for (const [key, value] of [["CONNECT_PDM_TRUST_PROXY_TLS", previous.proxyTls], ["CONNECT_PDM_ALLOWED_ORIGINS", previous.origins], ["PORT", previous.port]]) {
+      if (value === undefined) delete process.env[key]; else process.env[key] = value;
+    }
+  });
+  const address = await coordinator.listen();
+  const base = `http://127.0.0.1:${address.port}`;
+  assert.equal(coordinator.protocol, "http", "TLS terminates outside Node; forwarded headers do not change auth behavior");
+  const allowed = await fetch(`${base}/api/operator`, { method: "OPTIONS", headers: { origin: "https://app.example.test" } });
+  assert.equal(allowed.headers.get("access-control-allow-origin"), "https://app.example.test");
+  const denied = await fetch(`${base}/api/operator`, { method: "OPTIONS", headers: { origin: "https://other.example.test" } });
+  assert.equal(denied.headers.get("access-control-allow-origin"), null);
+  const unauthenticated = await fetch(`${base}/api/operator`, { headers: { "x-forwarded-proto": "https", "x-forwarded-for": "127.0.0.1" } });
+  assert.equal(unauthenticated.status, 401);
+});
+
+test("Render proxy TLS setting does not replace required park or operator configuration", () => {
+  const previous = process.env.CONNECT_PDM_TRUST_PROXY_TLS;
+  process.env.CONNECT_PDM_TRUST_PROXY_TLS = "true";
+  try {
+    assert.throws(() => createCoordinator({ parkId: "park-render", operators: [], host: "0.0.0.0", port: 0 }), /credenciais individuais/);
+    assert.throws(() => createCoordinator({ parkId: "", operators: [{ userId: "9f05e57e-0c89-47a8-8456-9ae3a09ba77d", token: "render-validation-test-token-with-at-least-32-characters", role: "park_manager", expiresAt: new Date(Date.now() + 60000).toISOString(), disabled: false }], host: "0.0.0.0", port: 0 }), /CONNECT_PDM_PARK_ID/);
+  } finally {
+    if (previous === undefined) delete process.env.CONNECT_PDM_TRUST_PROXY_TLS; else process.env.CONNECT_PDM_TRUST_PROXY_TLS = previous;
+  }
+});
+
 test("coordinator backfills replay results for existing SQLite operations", async (t) => {
   const directory = await mkdtemp(join(tmpdir(), "connect-pdm-idempotency-migration-"));
   const dbPath = join(directory, "legacy.sqlite");

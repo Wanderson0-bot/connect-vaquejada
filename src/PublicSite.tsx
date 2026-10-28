@@ -35,28 +35,30 @@ export function PublicSite() {
   }
 
   useEffect(() => {
-    if (route.type === "events" || route.type === "event") void refresh();
+    if (route.type === "home" || route.type === "events" || route.type === "event") void refresh();
   }, []);
 
   const selectedEvent = route.type === "event" ? events.find((item) => item.event_id === route.id) : undefined;
-  const showList = route.type === "events";
+  const showList = route.type === "home" || route.type === "events";
   const showEvent = route.type === "event";
-  const heroTitle = route.type === "park" ? "Perfil p\u00fablico do parque indispon\u00edvel"
+  const heroTitle = route.type === "home" ? "Connect Vaquejada"
+    : route.type === "park" ? "Perfil p\u00fablico do parque indispon\u00edvel"
     : showEvent ? selectedEvent?.event_name || "Detalhes do evento"
       : route.type === "not-found" ? "P&#225;gina n&#227;o encontrada" : "Vaquejadas Connect";
   const heroDescription = selectedEvent
     ? [selectedEvent.park_name, selectedEvent.city, selectedEvent.state].filter(Boolean).join(" · ")
-    : showList ? "Eventos divulgados e autorizados pelas equipes respons\u00e1veis."
+    : route.type === "home" ? "Tradi\u00e7\u00e3o na pista, conex\u00e3o em cada resultado."
+      : showList ? "Eventos divulgados e autorizados pelas equipes respons\u00e1veis."
       : route.type === "park" ? "O calendario publico continua disponivel para consulta."
         : "Tradição na pista, conexão em cada resultado.";
 
   return <main className="public-site">
     <header className="public-site-header">
-      <a className="public-site-brand" href="/eventos" aria-label="Connect Vaquejada, calendario publico">
+      <a className="public-site-brand" href="/" aria-label="Connect Vaquejada, página inicial pública">
         <img src="/Simbolo-Principal-Connect-Vaquejada.png" alt="" />
         <span><strong>CONNECT</strong><small>VAQUEJADA</small></span>
       </a>
-      <a className="public-site-login" href="/">Area interna</a>
+      <a className="public-site-login" href="/eventos">Calendário de eventos</a>
     </header>
     <section className="public-site-hero">
       <span className="eyebrow">Tradição na pista, conexão em cada resultado.</span>

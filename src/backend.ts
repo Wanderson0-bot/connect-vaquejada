@@ -81,12 +81,6 @@ export type ConnectAdminDashboard = {
   recent_parks: Array<Pick<ConnectPark, "id" | "name" | "city" | "state" | "access_status"> & { created_at: string }>;
 };
 
-const OFFLINE_PROFILE_KEY = "connect-pdm-offline-park";
-const OFFLINE_ACCESS_MS = 60 * 60 * 1000;
-function isConnectivityFailure(error: unknown): boolean {
-  const message = error instanceof Error ? error.message : String(error);
-  return !navigator.onLine || /failed to fetch|network error|networkerror|load failed|fetch failed|connection|offline/i.test(message);
-}
 function isMissingRpc(error: { code?: string } | null): boolean {
   return error?.code === "PGRST202" || error?.code === "42883";
 }
@@ -95,26 +89,10 @@ function throwMissingMigration(error: { code?: string } | null, functionName: st
     throw new Error(`A função ${functionName} ainda não existe no Supabase. Aplique a migration ${migrationFile} e tente novamente.`);
   }
 }
-function readOfflinePark(userId?: string): ParkProfile | null {
-  if (typeof localStorage === "undefined") return null;
-  try {
-    const cached = JSON.parse(localStorage.getItem(OFFLINE_PROFILE_KEY) || "null") as { profile?: ParkProfile; verifiedAt?: number } | null;
-    if (!cached?.profile || !cached.verifiedAt || Date.now() - cached.verifiedAt > OFFLINE_ACCESS_MS) return null;
-    if (userId && cached.profile.access_user_id !== userId) return null;
-    const profile = cached.profile;
-    if (profile.access_role !== "park_manager") {
-      const validEvents = (profile.event_access || []).filter((access) => Date.parse(access.expires_at) > Date.now());
-      if (!validEvents.length) return null;
-      profile.event_access = validEvents;
-    }
-    return profile;
-  } catch { return null; }
-}
-function rememberOfflinePark(profile: ParkProfile): void {
-  try { localStorage.setItem(OFFLINE_PROFILE_KEY, JSON.stringify({ profile, verifiedAt: Date.now() })); } catch { /* Offline access is unavailable when browser storage is blocked. */ }
-}
 export function clearOfflineParkCache(): void {
-  try { localStorage.removeItem(OFFLINE_PROFILE_KEY); } catch { /* Ignore unavailable storage. */ }
+  // Remove stale cache entries written by previous app versions. Cached membership
+  // is never sufficient to authorize a protected view.
+  try { localStorage.removeItem("connect-pdm-offline-park"); } catch { /* Ignore unavailable storage. */ }
 }
 
 export async function currentSession(): Promise<AuthSession | null> {
@@ -170,7 +148,7 @@ export async function signOut() {
 }
 export async function requestPasswordReset(email: string) {
   if (!supabase) throw new Error("Autenticação ainda não configurada.");
-  const { error } = await supabase.auth.resetPasswordForEmail(email, { redirectTo: `${window.location.origin}/?passwordRecovery=1` });
+  const { error } = await supabase.auth.resetPasswordForEmail(email, { redirectTo: `${window.location.origin}/recuperar-senha?passwordRecovery=1` });
   if (error) throw error;
 }
 export async function updatePassword(password: string) {
@@ -180,45 +158,27 @@ export async function updatePassword(password: string) {
 }
 export async function getParkProfile(): Promise<ParkProfile | null> {
   if (!supabase) return null;
-  let session: AuthSession | null = null;
-  try { session = await currentSession(); }
-  catch (error) {
-    if (isConnectivityFailure(error)) throw new Error("A identidade local nao pode ser verificada offline. Reconecte antes de continuar.");
-    throw error;
-  }
+  const session = await currentSession();
   if (!session) return null;
-  if (!navigator.onLine) {
-    const cached = readOfflinePark(session.user.id);
-    if (cached) return cached;
-    throw new Error("A validação offline do parque expirou. Conecte-se para revalidar a conta.");
+  if (!navigator.onLine) throw new Error("As permissões reais não podem ser revalidadas offline. Reconecte-se antes de abrir a área protegida.");
+  const [{ data: parkRows, error: parkError }, { data: accessRows, error: accessError }] = await Promise.all([
+    supabase.rpc("get_my_park_context"), supabase.rpc("get_my_event_contexts"),
+  ]);
+  if (parkError) throw parkError;
+  if (accessError && !isMissingRpc(accessError)) throw accessError;
+  const row = Array.isArray(parkRows) ? parkRows[0] : null;
+  const eventAccess = Array.isArray(accessRows) ? accessRows as ParkProfile["event_access"] : [];
+  const eventContext = eventAccess?.[0];
+  if (!row && !eventContext) { clearOfflineParkCache(); return null; }
+  const profile = row
+    ? { ...row, access_user_id: session.user.id, event_access: eventAccess } as ParkProfile
+    : { id: eventContext!.park_id, owner_user_id: "", name: "", manager_name: "", phone: "", city: "", state: "", address: "", access_role: eventContext!.role, access_user_id: session.user.id, event_access: eventAccess } as ParkProfile;
+  if (!row && eventContext) {
+    profile.name = (accessRows as Array<{ park_name?: string }>)[0]?.park_name || "Parque do evento";
+    profile.city = (accessRows as Array<{ city?: string }>)[0]?.city || "";
+    profile.state = (accessRows as Array<{ state?: string }>)[0]?.state || "";
   }
-  try {
-    const [{ data: parkRows, error: parkError }, { data: accessRows, error: accessError }] = await Promise.all([
-      supabase.rpc("get_my_park_context"), supabase.rpc("get_my_event_contexts"),
-    ]);
-    if (parkError) throw parkError;
-    if (accessError && !isMissingRpc(accessError)) throw accessError;
-    const row = Array.isArray(parkRows) ? parkRows[0] : null;
-    const eventAccess = Array.isArray(accessRows) ? accessRows as ParkProfile["event_access"] : [];
-    const eventContext = eventAccess?.[0];
-    if (!row && !eventContext) { clearOfflineParkCache(); return null; }
-    const profile = row
-      ? { ...row, access_user_id: session.user.id, event_access: eventAccess } as ParkProfile
-      : { id: eventContext!.park_id, owner_user_id: "", name: "", manager_name: "", phone: "", city: "", state: "", address: "", access_role: eventContext!.role, access_user_id: session.user.id, event_access: eventAccess } as ParkProfile;
-    if (!row && eventContext) {
-      profile.name = (accessRows as Array<{ park_name?: string }>)[0]?.park_name || "Parque do evento";
-      profile.city = (accessRows as Array<{ city?: string }>)[0]?.city || "";
-      profile.state = (accessRows as Array<{ state?: string }>)[0]?.state || "";
-    }
-    rememberOfflinePark(profile);
-    return profile;
-  } catch (error) {
-    if (isConnectivityFailure(error)) {
-      const cached = readOfflinePark(session.user.id);
-      if (cached) return cached;
-    }
-    throw error;
-  }
+  return profile;
 }
 export async function getPlatformContext(): Promise<PlatformContext | null> {
   if (!supabase) return null;
@@ -494,7 +454,6 @@ export async function updateParkProfile(park: ParkProfile) {
     updated_at: new Date().toISOString(),
   }).eq("id", park.id);
   if (error) throw error;
-  rememberOfflinePark(park);
 }
 
 export async function createParkInvitation(email: string, role: ParkProfile["access_role"]) {

@@ -1,4 +1,4 @@
-import { FormEvent, lazy, Suspense, useEffect, useState } from "react";
+import { FormEvent, lazy, Suspense, useEffect, useRef, useState } from "react";
 import { LogIn, ShieldCheck } from "lucide-react";
 import {
   AuthSession,
@@ -46,12 +46,20 @@ export function AccountGate({ children }: AccountProps) {
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
   const [recovery, setRecovery] = useState(false);
+  const accountValidation = useRef(0);
+  const connectRoute = window.location.pathname === "/connect" || window.location.pathname === "/connect/" || window.location.pathname.startsWith("/connect/");
+  const authEntryRoute = window.location.pathname === "/entrar";
 
   async function loadAccount() {
+    const validationId = ++accountValidation.current;
+    setLoading(true);
     setError("");
     try {
       const active = await currentSession();
-      setSession(active);
+      if (validationId !== accountValidation.current) return;
+      setSession(null);
+      setPark(null);
+      setPlatformContext(null);
       if (
         (window.location.hash.includes("type=recovery") ||
           new URLSearchParams(window.location.search).has(
@@ -70,35 +78,41 @@ export function AccountGate({ children }: AccountProps) {
       );
       if (eventInvite) {
         await acceptEventStaffInvitation(eventInvite);
+        if (validationId !== accountValidation.current) return;
         window.history.replaceState(null, "", window.location.pathname);
       }
       const invite = localStorage.getItem(INVITATION_KEY);
       if (invite) {
         await acceptParkInvitation(invite);
+        if (validationId !== accountValidation.current) return;
         localStorage.removeItem(INVITATION_KEY);
       }
       const [nextPlatform, nextPark] = await Promise.all([
         getPlatformContext(),
         getParkProfile(),
       ]);
+      const stillActive = await currentSession();
+      if (validationId !== accountValidation.current || !stillActive || stillActive.user.id !== active.user.id) {
+        setSession(null);
+        setPark(null);
+        setPlatformContext(null);
+        return;
+      }
+      setSession(stillActive);
       setPlatformContext(nextPlatform);
       setPark(nextPark);
     } catch (reason) {
-      if (!navigator.onLine) {
-        const cachedPark = await getParkProfile().catch(() => null);
-        if (cachedPark) {
-          setSession(null);
-          setPark(cachedPark);
-          return;
-        }
-      }
+      if (validationId !== accountValidation.current) return;
+      setSession(null);
+      setPark(null);
+      setPlatformContext(null);
       setError(
         reason instanceof Error
           ? reason.message
           : "Não foi possível carregar a conta.",
       );
     } finally {
-      setLoading(false);
+      if (validationId === accountValidation.current) setLoading(false);
     }
   }
   useEffect(() => {
@@ -123,23 +137,43 @@ export function AccountGate({ children }: AccountProps) {
       data: { subscription },
     } = supabase.auth.onAuthStateChange((event, active) => {
       if (event === "SIGNED_OUT") {
+        accountValidation.current += 1;
         setSession(null);
         setPark(null);
         setPlatformContext(null);
         setRecovery(false);
+        setLoading(false);
+        clearOfflineParkCache();
+        clearCoordinatorSettings();
       }
       if (event === "PASSWORD_RECOVERY") {
+        accountValidation.current += 1;
         setSession(active);
         setPark(null);
         setRecovery(true);
+        setLoading(false);
       }
-      if (event === "SIGNED_IN" || event === "TOKEN_REFRESHED")
+      if (event === "SIGNED_IN" || event === "TOKEN_REFRESHED") {
+        setSession(null);
+        setPark(null);
+        setPlatformContext(null);
         void loadAccount();
+      }
     });
     return () => subscription.unsubscribe();
   }, []);
+  useEffect(() => {
+    if (authEntryRoute && session && park && !loading) window.location.replace("/operacao");
+  }, [authEntryRoute, session, park, loading]);
 
   async function handleSignOut() {
+    accountValidation.current += 1;
+    setSession(null);
+    setPark(null);
+    setPlatformContext(null);
+    setMessage("");
+    clearOfflineParkCache();
+    clearCoordinatorSettings();
     try {
       await signOut();
     } catch (error) {
@@ -147,17 +181,11 @@ export function AccountGate({ children }: AccountProps) {
     } finally {
       clearOfflineParkCache();
     }
-    clearCoordinatorSettings();
-    setSession(null);
-    setPark(null);
-    setPlatformContext(null);
-    setMessage("");
   }
   async function handleSavePark(value: ParkProfile) {
     await updateParkProfile(value);
     setPark(value);
   }
-  const connectRoute = window.location.pathname === "/connect" || window.location.pathname === "/connect/" || window.location.pathname.startsWith("/connect/");
   const invitationMode = Boolean(
     !connectRoute &&
       (new URLSearchParams(window.location.search).has("eventInvite") ||
@@ -165,27 +193,16 @@ export function AccountGate({ children }: AccountProps) {
         localStorage.getItem(INVITATION_KEY)),
   );
 
-  if (!backendConfigured && connectRoute)
+  if (!backendConfigured)
     return (
       <AccountShell>
         <div className="account-card card form-card">
-          <h2>Painel administrativo Connect indisponível</h2>
-          <p>Configure e valide o Supabase para acessar esta área. O modo local deste aparelho não autentica nem concede acesso administrativo.</p>
-          <a className="secondary" href="/">Voltar à operação local</a>
+          <h2>Área protegida indisponível</h2>
+          <p>Configure e valide o Supabase Auth para autenticar uma conta e consultar as permissões reais no servidor. O modo local deste aparelho não autentica usuários nem concede acesso a áreas internas.</p>
+          <a className="secondary" href="/eventos">Voltar ao site público</a>
         </div>
       </AccountShell>
     );
-
-  // The standalone IndexedDB mode does not authenticate users. Keep it usable
-  // when Supabase is not configured; connected mode still requires a session.
-  if (!backendConfigured)
-    return children({
-      park: null,
-      onSignOut: async () => {},
-      onSavePark: async () => {
-        throw new Error("Configure o Supabase para editar o perfil do parque.");
-      },
-    });
 
   if (loading)
     return (

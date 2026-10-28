@@ -1,5 +1,5 @@
 const operationRoutes = {
-  overview: "/",
+  overview: "/operacao",
   entries: "/operacao/inscricoes",
   track: "/operacao/pista",
   settings: "/operacao/vaquejadas",
@@ -22,8 +22,8 @@ const connectRoutes = {
 const tabByArea = { office: "entries", announcer: "track", operational: "track" };
 
 export function operationTabForPath(pathname) {
-  if (pathname === "/operacao") return "overview";
-  return Object.entries(operationRoutes).find(([, path]) => path === pathname)?.[0] || null;
+  const normalized = pathname.length > 1 ? pathname.replace(/\/+$/, "") : pathname;
+  return Object.entries(operationRoutes).find(([, path]) => path === normalized)?.[0] || null;
 }
 
 export function operationPathForTab(tab) {
@@ -46,12 +46,13 @@ export function operationTabForArea(area) {
 
 export function operationTabForLocation(pathname, area) {
   const areaTab = operationTabForArea(area);
-  if (pathname === "/" && areaTab) return areaTab;
-  return operationTabForPath(pathname) || areaTab;
+  const pathTab = operationTabForPath(pathname);
+  if (pathname === "/operacao" && areaTab) return areaTab;
+  return pathTab;
 }
 
 export function isOperationPath(pathname) {
-  return pathname === "/" || operationTabForPath(pathname) !== null;
+  return operationTabForPath(pathname) !== null;
 }
 
 export function connectViewForPath(pathname) {
@@ -94,6 +95,7 @@ export function isPublicParkPath(pathname) {
 }
 
 export function publicRouteForPath(pathname) {
+  if (pathname === "/" || pathname === "/index.html") return { type: "home" };
   if (pathname === "/eventos" || pathname === "/eventos/") return { type: "events" };
   const match = pathname.match(/^\/(eventos|parques)\/([^/]+)\/?$/);
   if (!match) return { type: "not-found" };

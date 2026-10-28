@@ -170,7 +170,7 @@ async function readLocalDatabase(page, eventId) {
   })()`);
 }
 
-test("Edge production UI: fictional event, track queue, IndexedDB reload and local offline recovery", { timeout: 180000 }, async (t) => {
+test("Edge production UI: public home and anonymous protected-route denial", { timeout: 180000 }, async (t) => {
   assert.equal(typeof WebSocket, "function", "Node runtime precisa oferecer WebSocket para CDP sem dependencias adicionais.");
   await stat(viteCli);
   await stat(edgePath);
@@ -195,10 +195,15 @@ test("Edge production UI: fictional event, track queue, IndexedDB reload and loc
   build.stdout.setEncoding("utf8"); build.stderr.setEncoding("utf8");
   build.stdout.on("data", (chunk) => { buildLog += chunk; });
   build.stderr.on("data", (chunk) => { buildLog += chunk; });
+  let buildTimeoutId;
+  const buildTimeout = new Promise((resolve) => {
+    buildTimeoutId = setTimeout(() => resolve({ timeout: true }), 120000);
+  });
   const buildResult = await Promise.race([
     once(build, "exit").then(([code]) => ({ code })),
-    delay(120000).then(() => ({ timeout: true })),
+    buildTimeout,
   ]);
+  clearTimeout(buildTimeoutId);
   if (buildResult.timeout) {
     build.kill();
     throw new Error(`Build isolado excedeu 120 segundos: ${buildLog}`);
@@ -324,239 +329,56 @@ test("Edge production UI: fictional event, track queue, IndexedDB reload and loc
     genericResourceErrors.length = 0;
     faviconErrors.length = 0;
     requestFailures.length = 0;
-    const pageLoad = page.once("Page.loadEventFired");
-    await page.call("Page.navigate", { url: baseUrl });
-    await pageLoad;
-    await waitFor("aplicacao Connect PDM carregada", async () => (await page.evaluate("document.querySelector('main') && document.body.innerText.includes('Visão geral') && !document.body.innerText.includes('Carregando dados locais')")) || false);
-    const initialText = await bodyText(page);
-    assert.match(initialText, /Dados locais neste aparelho/, "Ensaio deve iniciar no modo local sem Supabase.");
-    t.diagnostic(`Navegador: ${browserInfo.Browser}; URL local: ${baseUrl}; modo: IndexedDB local isolado.`);
+    const navigate = async (url) => {
+      const loaded = page.once("Page.loadEventFired");
+      await page.call("Page.navigate", { url });
+      await loaded;
+    };
+    await navigate(baseUrl);
+    await waitFor("public home at root", async () => (await bodyText(page)).includes("Connect Vaquejada") && (await bodyText(page)).includes("Eventos publicados"));
+    let text = await bodyText(page);
+    assert.doesNotMatch(text, /Vis.o geral|Console operacional|rea interna|Pista e resultados/);
+    const publicLinks = await page.evaluate("[...document.querySelectorAll('a')].map((item) => item.getAttribute('href'))");
+    assert.equal(publicLinks.some((href) => href && (/^\/connect(?:\/|$)/.test(href) || /^\/operacao(?:\/|$)/.test(href))), false, "Public navigation must not reveal internal areas.");
+    t.diagnostic(`Browser: ${browserInfo.Browser}; local URL: ${baseUrl}; Supabase deliberately unset; anonymous session.`);
 
-    const eventId = `e2e-${crypto.randomUUID()}`;
-    testedEventId = eventId;
-    const eventName = `Evento fictício Connect PDM ${eventId.slice(-8)}`;
-    const day = new Date();
-    const localDate = `${day.getFullYear()}-${String(day.getMonth() + 1).padStart(2, "0")}-${String(day.getDate()).padStart(2, "0")}`;
-
-    await clickButton(page, "Vaquejadas");
-    assert.equal(await page.evaluate("document.querySelector('[role=dialog]') === null"), true, "O formulário deve ficar fechado na lista de vaquejadas.");
-    await clickButton(page, "Cadastrar vaquejada");
-    assert.equal(await page.evaluate("document.querySelector('[role=dialog]') !== null"), true, "O formulário deve abrir em um modal.");
-    await fillField(page, "Nome da vaquejada", eventName);
-    await clickButton(page, "Adicionar dia");
-    await fillField(page, "Data do dia", localDate);
-    await clickButton(page, "Adicionar rodízio");
-    await fillField(page, "Nome", "Rodízio de homologação");
-    const dayId = await page.evaluate("document.querySelector('select option[value]:not([value=\"\"])')?.value || ''");
-    assert.ok(dayId, "O dia criado deve estar disponível para o rodízio.");
-    await fillField(page, "Dia", dayId);
-    await fillField(page, "Ordem", 1);
-    await fillField(page, "Capacidade", 3);
-    await fillField(page, "Faixa de senhas — de", 1);
-    await fillField(page, "Faixa de senhas — até", 3);
-    await fillField(page, "Janela de chamada", 1);
-    await fillField(page, "Local", "Parque fictício local");
-    await fillField(page, "Confirmação de pontuação", "confirm");
-    const categoryReady = await page.evaluate("[...document.querySelectorAll('input[name=categories]')].some((item) => item.checked)");
-    assert.equal(categoryReady, true, "O evento ficticio precisa ter ao menos uma categoria selecionada.");
-    await clickButton(page, "Criar vaquejada");
-    await waitFor("cadastro do evento ficticio", async () => (await bodyText(page)).includes(`${eventName}`));
-    const activeEventId = await page.evaluate("document.querySelector('#activeEvent')?.value || ''");
-    assert.ok(activeEventId, "O evento criado deve ficar selecionado.");
-    testedEventId = activeEventId;
-
-    for (const number of [1, 2, 3]) {
-      await fillField(page, "Número da senha", number);
-      await fillField(page, "Vaqueiro / puxador", `Competidor fictício ${number}`);
-      await fillField(page, "Cavalo", `Cavalo fictício ${number}`);
-      await fillField(page, "Representação", `Parceiro fictício ${number}`);
-      await fillField(page, "Situação do pagamento", "paid");
-      await clickButton(page, "Salvar inscrição");
-      await waitFor(`inscricao ficticia ${number}`, async () => (await bodyText(page)).includes(`Competidor fictício ${number}`));
-      const entryText = await bodyText(page);
-      assert.doesNotMatch(entryText, /Não foi possível cadastrar a inscrição/, `Inscricao ${number} nao deve terminar com erro de interface.`);
+    for (const area of ["office", "announcer", "operational"]) {
+      await navigate(`${baseUrl}?area=${area}&event=private-test-id`);
+      await waitFor(`public home after ${area} shortcut parameters`, async () => (await bodyText(page)).includes("Eventos publicados"));
+      text = await bodyText(page);
+      assert.match(text, /Connect Vaquejada/);
+      assert.doesNotMatch(text, /Vis.o geral|Console operacional|private-test-id/);
     }
 
-    await clickButton(page, "Pista e resultados");
-    await fillField(page, "Responsável da operação", "Operador fictício de teste");
-    await waitFor("estado inicial do rodizio", async () => (await bodyText(page)).includes("Console operacional da pista") && (await bodyText(page)).includes("Senha atual"));
-    assert.match(await bodyText(page), /Classificação oficial bloqueada/, "A falta de tabela aprovada deve continuar visivel.");
-
-    await clickButton(page, "Chamar senha 1");
-    await waitFor("chamada da senha 1", async () => (await bodyText(page)).includes("Senha atual\n1"));
-    await finishRace(page);
-    let database = await readLocalDatabase(page, activeEventId);
-    assert.equal(database.state?.races.length, 1);
-    assert.equal(database.state.races[0].status, "official");
-    assert.equal(database.state.races[0].outcome, "zero", "Resultado ficticio usa zero, sem inventar pontuacao.");
-    assert.deepEqual(database.tickets, [1, 2, 3]);
-
-    await page.call("Page.reload");
-    await waitFor("recarregamento e recuperacao do evento", async () => (await bodyText(page)).includes(eventName));
-    await clickButton(page, "Pista e resultados");
-    await waitFor("reabrir console e resultado", async () => {
-      const text = await bodyText(page);
-      return text.includes("Console operacional da pista") && text.includes("Resultado confirmado");
-    });
-    await fillField(page, "Responsável da operação", "Operador fictício de teste");
-    database = await readLocalDatabase(page, activeEventId);
-    assert.equal(database.state?.races.length, 1, "Reload nao pode duplicar corrida.");
-    assert.equal(database.state?.history.some((item) => item.action === "result.confirm"), true, "Historico do resultado confirmado precisa sobreviver ao reload.");
-
-    await clickButton(page, "Chamar senha 2");
-    await waitFor("chamada ativa da senha 2", async () => (await bodyText(page)).includes("Senha atual\n2"));
-    await waitForButton(page, "Registrar ausência após prazo");
-    await clickButton(page, "Registrar ausência após prazo");
-    await waitForButton(page, "Mover para final da fila");
-    dialogResponses.push("Ausência fictícia confirmada para homologação");
-    await clickButton(page, "Mover para final da fila");
-    await waitForButton(page, "Chamar senha 3");
-    database = await readLocalDatabase(page, activeEventId);
-    const deferredCall = database.state.calls.find((item) => item.entryId && item.movedFrom !== undefined);
-    assert.ok(deferredCall, "A chamada ausente deve preservar as posicoes anterior e final.");
-    const deferredEntryId = deferredCall.entryId;
-    const stableTicket = database.tickets[1];
-    assert.equal(stableTicket, 2, "Mover a chamada nao altera a senha original.");
-
-    await clickButton(page, "Chamar senha 3");
-    await finishRace(page, 35);
-    database = await readLocalDatabase(page, activeEventId);
-    assert.equal(database.state.races.find((item) => item.ticketNumber === 3)?.announcedPoints, 35, "A nota registrada deve corresponder exatamente à anunciada pelo juiz.");
-    await clickButton(page, "Chamar senha 2");
-    await waitFor("reconvocacao da senha original", async () => (await bodyText(page)).includes("Senha atual\n2"));
-    database = await readLocalDatabase(page, activeEventId);
-    const callsForDeferred = database.state.calls.filter((item) => item.entryId === deferredEntryId);
-    assert.equal(callsForDeferred.length, 2, "A nova convocacao gera novo historico de chamada sem duplicar a chamada original.");
-    assert.notEqual(callsForDeferred[0].id, callsForDeferred[1].id, "A reconvocacao tem identificador proprio, distinto da chamada ausente.");
-    assert.equal(new Set(callsForDeferred.map((item) => item.raceId)).size, 1, "A mesma inscricao retoma a corrida pendente original, sem duplicar corrida.");
-    assert.equal(database.state.races.filter((item) => item.entryId === deferredEntryId).length, 1, "A senha 2 continua com uma corrida apesar da ausencia e reconvocacao.");
-    assert.equal(database.state.races.length, 3, "As tres inscricoes chamadas possuem tres corridas no total.");
-    assert.equal(database.state.races.find((item) => item.entryId === deferredEntryId)?.ticketNumber, 2);
-    assert.deepEqual(database.tickets, [1, 2, 3]);
-    assert.equal(database.state.history.some((item) => item.action === "call.move_tail"), true);
-    const absenceHistory = database.state.history.find((item) => item.action === "call.absent" && item.recordId === callsForDeferred[0].id);
-    const moveHistory = database.state.history.find((item) => item.action === "call.move_tail" && item.recordId === callsForDeferred[0].id);
-    assert.equal(absenceHistory?.after?.status, "absent", "A auditoria preserva o registro da chamada anterior como ausência.");
-    assert.equal(moveHistory?.before?.status, "absent", "A ação de mover para o fim parte da chamada registrada como ausente.");
-
-    await finishRace(page);
-    database = await readLocalDatabase(page, activeEventId);
-    assert.equal(database.state.races.length, 3, "Tres inscricoes ficticias produzem tres corridas, sem corrida duplicada para o ausente.");
-    assert.equal(database.state.calls.length, 4, "Historico conserva chamada original, deslocamento e reconvocacao.");
-    assert.equal(database.trackOutbox, 0, "Sem backend, o modo local nao deve alegar outbox remota.");
-    assert.equal(database.coordinatorOutbox, 0, "Sem coordenador configurado, nao ha outbox LAN.");
-
-    await page.call("Page.reload");
-    await waitFor("reload do evento com tres corridas", async () => (await bodyText(page)).includes(eventName));
-    await clickButton(page, "Pista e resultados");
-    await waitFor("persistencia das tres corridas apos reload", async () => {
-      const text = await bodyText(page);
-      return text.includes("Console operacional da pista") && text.includes("Resultado confirmado") && text.includes("3 registros");
-    });
-    await fillField(page, "Responsável da operação", "Operador fictício de teste");
-    database = await readLocalDatabase(page, activeEventId);
-    assert.equal(database.state.races.length, 3);
-    assert.equal(database.state.calls.length, 4);
-    assert.deepEqual(database.tickets, [1, 2, 3]);
-
-    dialogResponses.push("Pausa fictícia de teste");
-    await clickButton(page, "Pausar");
-    await waitFor("rodizio pausado", async () => (await page.evaluate(`(() => [...document.querySelectorAll('label')].find((item) => item.innerText.includes('Situação'))?.querySelector('input')?.value)()`)) === "paused");
-    await page.call("Page.reload");
-    await waitFor("evento apos reload de pausa", async () => (await bodyText(page)).includes(eventName));
-    await clickButton(page, "Pista e resultados");
-    await waitFor("recuperacao da pausa", async () => (await page.evaluate(`(() => [...document.querySelectorAll('label')].find((item) => item.innerText.includes('Situação'))?.querySelector('input')?.value)()`)) === "paused");
-    await fillField(page, "Responsável da operação", "Operador fictício de teste");
-    const pausedCall = await page.evaluate("(() => [...document.querySelectorAll('button')].find((item) => item.innerText.trim().startsWith('Chamar senha'))?.disabled)()");
-    assert.equal(pausedCall, true, "A chamada deve estar bloqueada com o rodizio pausado.");
-
-    dialogResponses.push("Retomada fictícia de teste");
-    await clickButton(page, "Retomar");
-    await waitFor("rodizio retomado", async () => (await page.evaluate(`(() => [...document.querySelectorAll('label')].find((item) => item.innerText.includes('Situação'))?.querySelector('input')?.value)()`)) === "active");
-    dialogResponses.push("Encerramento fictício de teste");
-    await clickButton(page, "Encerrar");
-    await waitFor("rodizio encerrado", async () => (await page.evaluate(`(() => [...document.querySelectorAll('label')].find((item) => item.innerText.includes('Situação'))?.querySelector('input')?.value)()`)) === "closed");
-    const closedCall = await page.evaluate("(() => [...document.querySelectorAll('button')].find((item) => item.innerText.trim().startsWith('Chamar senha'))?.disabled)()");
-    assert.equal(closedCall, true, "A chamada deve estar bloqueada com o rodizio encerrado.");
-
-    dialogResponses.push("Reabertura fictícia autorizada para teste offline");
-    await clickButton(page, "Reabrir com justificativa");
-    await waitFor("rodizio reaberto", async () => (await page.evaluate(`(() => [...document.querySelectorAll('label')].find((item) => item.innerText.includes('Situação'))?.querySelector('input')?.value)()`)) === "active");
-
-    await waitFor("service worker pronto para testar navegacao offline", async () => page.evaluate("navigator.serviceWorker?.controller !== null") || false, 10000);
-    offlineSimulation = true;
-    await page.call("Network.emulateNetworkConditions", { offline: true, latency: 0, downloadThroughput: 0, uploadThroughput: 0, connectionType: "none" });
-    await waitFor("estado offline da interface", async () => (await bodyText(page)).includes("Dados locais · sem rede"));
-    assert.match(await bodyText(page), /Dados locais · sem rede/);
-    dialogResponses.push("Pausa local fictícia durante perda de rede");
-    await clickButton(page, "Pausar");
-    await waitForNotice(page, "Operação “Pausa” registrada no aparelho.");
-    await waitFor("operacao local de pista offline", async () => {
-      const database = await readLocalDatabase(page, activeEventId);
-      return database.state?.history.at(-1)?.action === "rotation.pause";
-    });
-    database = await readLocalDatabase(page, activeEventId);
-    assert.equal(database.state.syncState, "local");
-    assert.equal(database.state.history.at(-1)?.action, "rotation.pause", "A acao offline precisa ser persistida no historico local.");
-    assert.equal(database.trackOutbox, 0, "Sem backend configurado, a operacao offline nao pode parecer enfileirada remotamente.");
-    await page.call("Page.reload");
-    await waitFor("recovery offline da shell e do IndexedDB", async () => {
-      return (await bodyText(page)).includes(eventName);
-    }, 20000);
-    await clickButton(page, "Pista e resultados");
-    await waitFor("console aberto enquanto offline", async () => {
-      const text = await bodyText(page);
-      const rotationStatus = await page.evaluate(`(() => [...document.querySelectorAll('label')].find((item) => item.innerText.includes('Situação'))?.querySelector('input')?.value)()`);
-      return text.includes("Console operacional da pista") && rotationStatus === "paused";
-    });
-    database = await readLocalDatabase(page, activeEventId);
-    assert.equal(database.state.syncState, "local");
-    assert.equal(database.state.history.at(-1)?.action, "rotation.pause");
-    await page.call("Network.emulateNetworkConditions", { offline: false, latency: 0, downloadThroughput: -1, uploadThroughput: -1, connectionType: "wifi" });
-    await waitFor("restauracao de conectividade local", async () => (await bodyText(page)).includes("Dados locais neste aparelho"));
-    database = await readLocalDatabase(page, activeEventId);
-    assert.equal(database.state.syncState, "local", "Recuperar a conectividade nao significa sincronizacao remota.");
-    assert.equal(database.trackOutbox, 0, "Sem Supabase, nao ha confirmacao nem reenvio remoto.");
-    offlineSimulation = false;
-
-    for (const width of [360, 768, 1366]) {
-      await page.call("Emulation.setDeviceMetricsOverride", { width, height: 900, deviceScaleFactor: 1, mobile: width < 650 });
-      const layout = await page.evaluate("({ viewport: innerWidth, document: document.documentElement.scrollWidth, body: document.body.scrollWidth, mainTop: document.querySelector('main')?.getBoundingClientRect().top ?? Infinity, mainHeight: document.querySelector('main')?.getBoundingClientRect().height ?? 0 })");
-      assert.equal(layout.viewport, width, `Viewport deve ser ${width}px.`);
-      assert.ok(layout.document <= width + 1 && layout.body <= width + 1, `Operacao nao deve criar rolagem horizontal da pagina em ${width}px: ${JSON.stringify(layout)}`);
-      assert.ok(layout.mainTop < 900 && layout.mainHeight > 0, `Conteudo principal deve permanecer visivel no primeiro viewport em ${width}px: ${JSON.stringify(layout)}`);
-      await captureVisual(page, `operation-${width}`);
+    for (const path of [
+      "operacao", "operacao/inscricoes", "operacao/pista", "operacao/vaquejadas", "operacao/parque", "operacao/auditoria", "operacao/backup", "operacao/coordenador",
+      "connect", "connect/parques", "connect/parques/park-test-id", "connect/eventos", "connect/equipe", "connect/reconciliacao", "connect/publicacoes", "connect/plataforma",
+    ]) {
+      await navigate(`${baseUrl}${path}`);
+      await waitFor(`protected route /${path} denied`, async () => /protegida indispon.vel/.test(await bodyText(page)));
+      text = await bodyText(page);
+      assert.doesNotMatch(text, /Console operacional da pista|Dados locais neste aparelho|Vis.o geral do parque/);
+      if (path === "operacao/pista") for (const width of [360, 768, 1366]) {
+        await page.call("Emulation.setDeviceMetricsOverride", { width, height: 900, deviceScaleFactor: 1, mobile: width < 650 });
+        const layout = await page.evaluate("({ viewport: innerWidth, document: document.documentElement.scrollWidth, body: document.body.scrollWidth, mainTop: document.querySelector('main')?.getBoundingClientRect().top ?? Infinity })");
+        assert.equal(layout.viewport, width);
+        assert.ok(layout.document <= width + 1 && layout.body <= width + 1, `Denied screen must not overflow at ${width}px: ${JSON.stringify(layout)}`);
+        assert.ok(layout.mainTop < 900, `Denied screen must be visible at ${width}px: ${JSON.stringify(layout)}`);
+        await captureVisual(page, `protected-denied-${width}`);
+      }
     }
 
-    const publicListLoad = page.once("Page.loadEventFired");
-    await page.call("Page.navigate", { url: `${baseUrl}eventos` });
-    await publicListLoad;
-    await waitFor("rota publica carregada diretamente", async () => (await bodyText(page)).includes("Eventos publicados"));
+    await navigate(`${baseUrl}eventos`);
+    await waitFor("public event calendar", async () => (await bodyText(page)).includes("Eventos publicados"));
     await page.call("Page.reload");
-    await waitFor("refresh direto do calendario publico", async () => (await bodyText(page)).includes("Eventos publicados"));
-    for (const width of [360, 768, 1366]) {
-      await page.call("Emulation.setDeviceMetricsOverride", { width, height: 900, deviceScaleFactor: 1, mobile: width < 650 });
-      const layout = await page.evaluate("({ viewport: innerWidth, document: document.documentElement.scrollWidth, body: document.body.scrollWidth })");
-      assert.ok(layout.document <= width + 1 && layout.body <= width + 1, `Calendario nao deve criar rolagem horizontal em ${width}px: ${JSON.stringify(layout)}`);
-      await captureVisual(page, `public-events-${width}`);
-    }
-    const parkLoad = page.once("Page.loadEventFired");
-    await page.call("Page.navigate", { url: `${baseUrl}parques/park-test-id` });
-    await parkLoad;
-    await waitFor("estado seguro do perfil publico sem endpoint", async () => (await bodyText(page)).includes("consulta de perfil do parque"));
-    assert.match(await bodyText(page), /dados administrativos ou inferidos/);
-    await page.call("Emulation.setDeviceMetricsOverride", { width: 360, height: 900, deviceScaleFactor: 1, mobile: true });
-    await captureVisual(page, "public-park-unavailable-360");
-    const invalidIdLoad = page.once("Page.loadEventFired");
-    await page.call("Page.navigate", { url: `${baseUrl}eventos/invalid-id` });
-    await invalidIdLoad;
-    await waitFor("estado indisponivel do detalhe publico sem Supabase", async () => (await bodyText(page)).includes("A consulta pública ainda não está disponível."));
-    await captureVisual(page, "public-event-unavailable-360");
+    await waitFor("direct public calendar refresh", async () => (await bodyText(page)).includes("Eventos publicados"));
+    assert.match(await bodyText(page), /A consulta p.blica ainda n.o est. dispon.vel|Ainda n.o h. eventos publicados\./, "With Supabase unset, the site must show actual unavailability or an empty list, never invented events.");
 
-    assert.ok(genericResourceErrors.length <= faviconErrors.length, `Falha de recurso sem URL correspondente a favicon: ${JSON.stringify({ genericResourceErrors, faviconErrors })}`);
-    assert.deepEqual(consoleErrors, [], `Erros fatais/console: ${JSON.stringify(consoleErrors)}; navegador: ${browserLog}`);
-    assert.deepEqual(requestFailures, [], `Falhas de requisicao: ${JSON.stringify(requestFailures)}; Vite: ${previewLog}`);
-    t.diagnostic(`Evento ficticio ${eventId}; inscricoes 1/2/3; chamadas ${database.state.calls.length}; corridas ${database.state.races.length}; IndexedDB reload/offline local confirmados; outbox remota nao configurada; consoleErrors=0; favicon404=${faviconErrors.length}; falhasOfflineEsperadas=${expectedOfflineFailures.length}; requestFailures=0.`);
+    await navigate(`${baseUrl}eventos/invalid-id`);
+    await waitFor("public event unavailable without Supabase", async () => /A consulta p.blica ainda n.o est. dispon.vel/.test(await bodyText(page)));
+    assert.deepEqual(consoleErrors, [], `Unexpected browser console errors: ${JSON.stringify(consoleErrors)}; browser: ${browserLog}`);
+    assert.deepEqual(requestFailures, [], `Unexpected failed requests: ${JSON.stringify(requestFailures)}; Vite: ${previewLog}`);
+    t.diagnostic("Public root verified; 16 internal routes blocked anonymously; area/event shortcuts grant no access; public data reports actual unavailability; consoleErrors=0; requestFailures=0.");
   } catch (error) {
     let renderedPage = "<page unavailable>";
     try { renderedPage = await bodyText(page); } catch { /* Preserve the first failure. */ }

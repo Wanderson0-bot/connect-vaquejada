@@ -297,7 +297,7 @@ export function ConnectAdminConsole({ context, onSignOut }: Props) {
   }
   async function copyParkAreaLink(area: "office" | "announcer" | "operational") {
     if (!parkProfile) return;
-    const target = new URL("/", window.location.origin);
+    const target = new URL("/operacao", window.location.origin);
     target.searchParams.set("area", area);
     if (selectedEvent) target.searchParams.set("event", selectedEvent);
     try {
@@ -503,7 +503,7 @@ export function ConnectAdminConsole({ context, onSignOut }: Props) {
     setManagerInviteLink("");
     try {
       const invitation = await createConnectParkManagerInvitation(park.id, email);
-      const url = new URL("/", window.location.origin);
+      const url = new URL("/entrar", window.location.origin);
       url.searchParams.set("invite", invitation.invitation_token);
       setManagerInviteLink(url.toString());
       const historyError = await refreshParkAudit(park.id);
@@ -938,7 +938,7 @@ export function ConnectAdminConsole({ context, onSignOut }: Props) {
                 setBusy(true); setInviteLink("");
                 try {
                   const invitation = await createEventStaffInvitation(selectedEvent, String(form.get("email") || ""), String(form.get("role")) as "office" | "announcer" | "judge" | "track_operator", new Date(expires).toISOString());
-                  const url = new URL("/", window.location.origin);
+                  const url = new URL("/entrar", window.location.origin);
                   url.searchParams.set("eventInvite", invitation.invitation_token);
                   setInviteLink(url.toString());
                   const auditError = await refreshParkAudit(park.id);

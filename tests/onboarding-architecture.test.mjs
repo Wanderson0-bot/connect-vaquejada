@@ -79,12 +79,14 @@ test("UF é selecionável e telefone usa +55 com DDD padrão pela UF", () => {
 
 test("o painel Connect tem rota própria e nega acesso administrativo a perfis de parque", () => {
   assert.match(account, /pathname === "\/connect"/);
-  assert.match(account, /!backendConfigured && connectRoute[\s\S]*?não autentica nem concede acesso administrativo/);
+  assert.match(account, /if \(!backendConfigured\)[\s\S]*?Área protegida indisponível[\s\S]*?não autentica usuários nem concede acesso a áreas internas/);
+  assert.doesNotMatch(account, /if \(!backendConfigured\)\s*return children/);
   assert.match(account, /connectRoute && session && platformContext && canAccessPlatform/);
   assert.match(account, /connectRoute && session && !canAccessPlatform/);
   assert.doesNotMatch(account, /onOpenPlatform|openPlatform|openOperations/);
   assert.doesNotMatch(connectAdmin, /onOpenOperations/);
-  assert.equal((connectAdmin.match(/new URL\("\/", window\.location\.origin\)/g) || []).length, 3);
+  assert.equal((connectAdmin.match(/new URL\("\/entrar", window\.location\.origin\)/g) || []).length, 2);
+  assert.equal((connectAdmin.match(/new URL\("\/operacao", window\.location\.origin\)/g) || []).length, 1);
 });
 
 test("perfil do parque abre informações e equipe por um card de logo único", () => {

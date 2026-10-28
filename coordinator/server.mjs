@@ -37,12 +37,13 @@ export function createCoordinator({
   operatorCredentialsFile = process.env.CONNECT_PDM_OPERATOR_CREDENTIALS_FILE,
   parkId = process.env.CONNECT_PDM_PARK_ID,
   host = process.env.CONNECT_PDM_HOST || "0.0.0.0",
-  port = Number(process.env.CONNECT_PDM_PORT || 8787),
+  port = Number(process.env.PORT || process.env.CONNECT_PDM_PORT || 8787),
   webRoot = process.env.CONNECT_PDM_WEB_ROOT || resolve("dist"),
   tlsCert = process.env.CONNECT_PDM_TLS_CERT,
   tlsKey = process.env.CONNECT_PDM_TLS_KEY,
   allowedOrigins = (process.env.CONNECT_PDM_ALLOWED_ORIGINS || "http://localhost:5173,http://127.0.0.1:5173").split(",").map((value) => value.trim()).filter(Boolean),
   allowInsecureLan = process.env.CONNECT_PDM_ALLOW_INSECURE_LAN === "true",
+  trustProxyTls = process.env.CONNECT_PDM_TRUST_PROXY_TLS === "true",
 } = {}) {
   const loadOperators = () => {
     if (!operatorCredentialsFile) return operators;
@@ -58,9 +59,11 @@ export function createCoordinator({
     throw new Error("Configure CONNECT_PDM_OPERATOR_CREDENTIALS com credenciais individuais por usuário, perfil e expiração.");
   }
   if (!parkId) throw new Error("Defina CONNECT_PDM_PARK_ID para vincular este coordenador a um único parque.");
+  if (!Number.isInteger(port) || port < 0 || port > 65535) throw new Error("PORT/CONNECT_PDM_PORT precisa ser uma porta TCP válida.");
+  if (trustProxyTls && tlsCert) throw new Error("Use TLS terminado no proxy ou certificado local, não ambos.");
   const loopbackHosts = new Set(["127.0.0.1", "::1", "localhost"]);
-  if (!tlsCert && !loopbackHosts.has(host) && !allowInsecureLan) {
-    throw new Error("HTTPS é obrigatório para expor o coordenador na rede. Configure CONNECT_PDM_TLS_CERT e CONNECT_PDM_TLS_KEY; a exceção CONNECT_PDM_ALLOW_INSECURE_LAN=true serve apenas para testes isolados.");
+  if (!tlsCert && !loopbackHosts.has(host) && !allowInsecureLan && !trustProxyTls) {
+    throw new Error("HTTPS é obrigatório para expor o coordenador na rede. Configure CONNECT_PDM_TLS_CERT e CONNECT_PDM_TLS_KEY ou, somente atrás de um proxy com TLS externo, CONNECT_PDM_TRUST_PROXY_TLS=true.");
   }
   mkdirSync(dirname(resolve(dbPath)), { recursive: true });
   const db = new DatabaseSync(dbPath);

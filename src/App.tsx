@@ -99,7 +99,8 @@ const PublicSite = lazy(() => import("./PublicSite").then((module) => ({ default
 
 export default function App() {
   const { pathname } = window.location;
-  if (pathname === "/eventos" || pathname.startsWith("/eventos/") || isPublicParkPath(pathname)) return <Suspense fallback={<div className="public-site-empty" role="status">Carregando pagina publica...</div>}><PublicSite /></Suspense>;
+  if (pathname === "/entrar" || pathname === "/recuperar-senha") return <AccountGate>{() => <RouteNotFound />}</AccountGate>;
+  if (pathname === "/" || pathname === "/index.html" || pathname === "/eventos" || pathname.startsWith("/eventos/") || isPublicParkPath(pathname)) return <Suspense fallback={<div className="public-site-empty" role="status">Carregando pagina publica...</div>}><PublicSite /></Suspense>;
   if (isConnectPath(pathname) || isOperationPath(pathname)) return <AccountGate>{(account) => <Dashboard {...account} />}</AccountGate>;
   return <RouteNotFound />;
 }
