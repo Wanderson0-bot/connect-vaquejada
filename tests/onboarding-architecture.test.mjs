@@ -324,6 +324,14 @@ test("signup errors expose localized Better Auth 422 reasons instead of a generi
   assert.match(backendServer, /authResponse\.arrayBuffer\(\)/);
 });
 
+test("a 403 registration response is reported as authorization denial, not account-creation failure", () => {
+  const errorParser = backend.match(/function registrationErrorMessage\([\s\S]*?\n\}/)?.[0] ?? "";
+  assert.match(errorParser, /if \(status === 403\)/);
+  assert.ok(errorParser.indexOf("if (status === 403)") < errorParser.indexOf('if (detail.includes("FAILED_TO_CREATE_USER"))'));
+  assert.match(errorParser, /Cadastro não autorizado para este e-mail/);
+  assert.match(backendServer, /admin_bootstrap_invitations i where lower\(i\.email\)=lower\(\$2\) and i\.consumed_at is null and i\.expires_at>now\(\)/);
+});
+
 test("Connect signup is authorized by its configured email without a token, preserving park/event invitation flows", () => {
   assert.match(backendServer, /case when \$3::boolean then[\s\S]*admin_bootstrap_invitations[\s\S]*else[\s\S]*park_invitations[\s\S]*event_staff_invitations[\s\S]*end as allowed/);
   assert.match(backendServer, /lower\(i\.email\)=lower\(\$2\) and i\.consumed_at is null and i\.expires_at>now\(\)/);

@@ -210,6 +210,17 @@ function registrationErrorMessage(body: { error?: unknown; message?: unknown; co
   const error = typeof body?.error === "string" ? body.error : "";
   const detail = `${code} ${message} ${error}`.toUpperCase();
 
+  // A 403 from /api/register means the request was denied before account
+  // creation (CORS/origin or invitation authorization). Do not mislabel it as
+  // a Better Auth user-creation failure even if an upstream body has that code.
+  if (status === 403) {
+    if (error && !detail.includes("FAILED_TO_CREATE_USER")) return error;
+    if (detail.includes("INVALID_ORIGIN") || detail.includes("ORIGEM NÃO AUTORIZADA")) {
+      return "A origem deste acesso não está autorizada. Abra o cadastro pelo painel Connect oficial.";
+    }
+    return "Cadastro não autorizado para este e-mail. Confira se o convite inicial está ativo e se o e-mail informado é o mesmo autorizado.";
+  }
+
   if (detail.includes("USER_ALREADY_EXISTS") || detail.includes("ALREADY_EXISTS_USE_ANOTHER_EMAIL") || detail.includes("USER ALREADY EXISTS")) {
     return "Este e-mail já possui uma conta. Entre com sua conta ou use a opção de recuperação de senha.";
   }
