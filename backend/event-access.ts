@@ -1,5 +1,6 @@
 import { createHash, createHmac, randomInt, randomUUID } from "node:crypto";
 import { neon } from "@neondatabase/serverless";
+import { auth } from "./auth.js";
 
 type Request = {
   method?: string;
@@ -148,16 +149,15 @@ async function provision(body: EventAccessBody, request: Request): Promise<Recor
   if (expiry > eventEnd) {
     throw new RequestError("A validade do acesso não pode ultrapassar o encerramento do evento.", 400);
   }
-  const authBaseUrl = getRequiredEnv("NEON_AUTH_BASE_URL").replace(/\/$/, "");
-  const authResponse = await fetch(`${authBaseUrl}/auth/sign-up/email`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ email, password, name: `Connect evento ${body.role}` }),
-  });
-  const authPayload = await authResponse.json().catch(() => null) as unknown;
-  if (!authResponse.ok) {
-    console.error("Neon Auth rejected creation of an internal event identity.", authResponse.status);
-    throw new RequestError("O Neon Auth não criou a identidade interna para o acesso operacional.", 502);
+  try {
+    await auth.api.signUpEmail({
+      headers: new Headers({ origin: getRequiredEnv("BETTER_AUTH_URL") }),
+      body: { email, password, name: `Connect evento ${body.role}` },
+    });
+  } catch (error) {
+    const code = error && typeof error === "object" && "code" in error ? String(error.code) : "unknown";
+    console.error("Better Auth rejected creation of an internal event identity.", code);
+    throw new RequestError("Better Auth could not create the internal event identity.", 502);
   }
 
   let authUserId: string | undefined;
@@ -165,24 +165,28 @@ async function provision(body: EventAccessBody, request: Request): Promise<Recor
   try {
     const authRows = await sql`
       select id::text as id
-        from neon_auth."user"
+        from connect_auth."user"
        where lower(email) = lower(${email})
        limit 1
     `;
     authUserId = (authRows[0] as { id?: string } | undefined)?.id;
     if (!authUserId) {
-      const payload = authPayload && typeof authPayload === "object" ? authPayload as Record<string, unknown> : {};
-      console.error("Neon Auth did not persist the internal identity.", typeof payload.code === "string" ? payload.code : "unknown");
+      console.error("Better Auth did not persist the internal identity.", "unknown");
       throw new RequestError("O Neon Auth não criou a identidade interna para o acesso operacional.", 502);
     }
 
     await sql`
-      update neon_auth."user"
+      update connect_auth."user"
          set "emailVerified" = true
        where id::text = ${authUserId}
     `;
+    await sql`
+      update public.app_users
+         set email_confirmed_at = coalesce(email_confirmed_at, now())
+       where id = ${authUserId}::uuid
+    `;
     const identityRows = await sql`
-      select public.link_neon_auth_identity(${authUserId})::text as app_user_id
+      select app_user_id::text as app_user_id from public.neon_auth_identity_map where neon_subject=${authUserId}
     `;
     applicationUserId = (identityRows[0] as { app_user_id?: string } | undefined)?.app_user_id;
     if (!applicationUserId) throw new Error("Não foi possível associar a identidade Neon ao usuário da aplicação.");
@@ -211,7 +215,7 @@ async function provision(body: EventAccessBody, request: Request): Promise<Recor
   } catch (error) {
     if (authUserId) {
       try {
-        await sql`delete from neon_auth."user" where id::text = ${authUserId}`;
+        await sql`delete from connect_auth."user" where id::text = ${authUserId}`;
       } catch (cleanupError) {
         const cleanupCode = cleanupError && typeof cleanupError === "object" && "code" in cleanupError && typeof cleanupError.code === "string"
           ? cleanupError.code : "unknown";
@@ -241,7 +245,7 @@ async function signInWithEventRole(body: EventAccessBody, request: Request): Pro
   const identityRows = await sql`
     select auth_user.email
       from public.neon_auth_identity_map as identity
-      join neon_auth."user" as auth_user on auth_user.id::text = identity.neon_subject
+      join connect_auth."user" as auth_user on auth_user.id::text = identity.neon_subject
      where identity.app_user_id = ${applicationUserId}::uuid
      limit 1
   `;

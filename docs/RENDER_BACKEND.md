@@ -1,38 +1,46 @@
-# Backend Connect no Render
+﻿# Backend Connect Vaquejada no Render
 
-O backend web deste guia é a API `/api/event-access`, responsável por provisionar e validar acessos operacionais por código e PIN. O app público continua no Vercel e o PostgreSQL/Auth continuam no Neon. O serviço SQLite para coordenador local é outro componente; consulte [RENDER_COORDINATOR.md](./RENDER_COORDINATOR.md).
+O serviÃ§o `connect-vaquejada-backend` atende autenticaÃ§Ã£o Better Auth, cadastro protegido por convite, email de confirmaÃ§Ã£o e recuperaÃ§Ã£o de senha, alÃ©m da API de acesso operacional por cÃ³digo e PIN. O frontend permanece no Vercel e usa a Neon Data API para consultas PostgreSQL/RLS.
 
-## Deploy do serviço
-
-O repositório inclui `render.yaml` como Blueprint. No Render, crie um Blueprint a partir do repositório e confira o serviço `connect-vaquejada-backend`. A configuração usa:
+## ServiÃ§o
 
 - Build: `npm ci && npm run build:backend`
 - Start: `npm run start:backend`
 - Health check: `/health`
-- Serviço HTTP em `0.0.0.0`, na porta `PORT` definida pelo Render.
+- Node: `>=22.13.0`
 
-O plano inicial está definido como Free para evitar cobrança automática. Use-o somente para validar o deploy: o Render informa que o Free não é indicado para produção, suspende o serviço após 15 minutos sem tráfego e pode levar cerca de um minuto para reativá-lo. Para uso operacional, escolha um plano pago ativo no painel do Render antes de liberar o sistema.
+## VariÃ¡veis privadas no Render
 
-## Variáveis no Render
+- `DATABASE_URL`: conexÃ£o PostgreSQL direta do branch do ambiente (sem `-pooler`); TLS Ã© obrigatÃ³rio.
+- `BETTER_AUTH_URL`: URL pÃºblica do serviÃ§o Render, por exemplo `https://connect-vaquejada-backend.onrender.com`.
+- `BETTER_AUTH_SECRET`: segredo aleatÃ³rio de pelo menos 32 caracteres, exclusivo do ambiente.
+- `RESEND_API_KEY`: chave privada do serviÃ§o de email transacional.
+- `AUTH_EMAIL_FROM`: remetente verificado no provedor de email.
+- `NEON_DATA_API_URL`: endpoint Data API do mesmo branch.
+- `EVENT_ACCESS_PASSWORD_SECRET`: segredo aleatÃ³rio de pelo menos 32 caracteres, estÃ¡vel entre instÃ¢ncias; nÃ£o reutilize `BETTER_AUTH_SECRET`.
+- `BACKEND_ALLOWED_ORIGINS`: origens HTTPS exatas do frontend; inclua domÃ­nio de produÃ§Ã£o e domÃ­nio de preview somente se necessÃ¡rio.
 
-Configure no serviço Render; não use prefixo `VITE_` para esses valores:
+Configure segredos pelo painel do Render. NÃ£o os coloque no repositÃ³rio, Vercel ou variÃ¡veis `VITE_`.
 
-- `DATABASE_URL`: conexão do branch Neon que o backend deve usar. Use o branch escolhido para o ambiente; não use a URL direta reservada para migrations.
-- `NEON_AUTH_BASE_URL`: endpoint Neon Auth desse mesmo ambiente.
-- `NEON_DATA_API_URL`: endpoint Neon Data API desse mesmo ambiente.
-- `EVENT_ACCESS_PASSWORD_SECRET`: segredo aleatório forte, com ao menos 32 caracteres, igual em todas as instâncias do mesmo ambiente.
-- `BACKEND_ALLOWED_ORIGINS`: origens exatas autorizadas, separadas por vírgula, sem barra no final. Inclua o domínio `vercel.app` do frontend e cada domínio próprio usado.
+## Vercel
 
-Insira os segredos pelo painel do Render. Não cole valores secretos em `render.yaml`, Git ou frontend.
+Configure `VITE_BACKEND_API_URL` com a URL do serviÃ§o Render e `VITE_NEON_DATA_API_URL` com o endpoint Data API. `vercel.json` encaminha `/api/auth/*` e `/api/register` ao Render para manter cookies HTTP-only no domÃ­nio do frontend. O endereÃ§o destino atual presume o hostname `connect-vaquejada-backend.onrender.com`, conforme `render.yaml`; se o Render mostrar outro hostname, atualize o destino e publique novamente.
 
-## Variável no Vercel
+## Autenticação externa da Neon Data API
 
-No projeto Vercel do frontend, configure `VITE_BACKEND_API_URL` como a origem pública do Web Service Render, por exemplo `https://nome-do-servico.onrender.com`, sem caminho final. Salve e faça novo deploy do frontend para embutir essa variável no bundle.
+O backend emite JWTs Better Auth pelo plugin JWT (`/api/auth/token` e JWKS em `/api/auth/jwks`). `neon.external-auth.ts` declara a Data API com validação externa de JWKS. A Neon fixa o provedor JWT quando a Data API é habilitada pela primeira vez. Portanto:
 
-Depois do deploy, abra `https://nome-do-servico.onrender.com/health`; a resposta esperada é `{"status":"ok"}`. Em seguida, valide o fluxo de acesso operacional pelo frontend. O health check confirma que o processo HTTP responde, mas não testa Neon; a solicitação protegida deve validar Neon Auth e o banco.
+1. Use um projeto Neon novo ou um branch em que a Data API ainda não tenha sido habilitada com Neon Auth. Se o branch herdar o provedor atual, use outro projeto.
+2. O CLI carrega `neon.ts` por padrão. Em um checkout de staging isolado, use `neon.external-auth.ts` como arquivo `neon.ts`, defina `BETTER_AUTH_URL` e `BETTER_AUTH_JWKS_URL`, e confira `neon config plan` antes de qualquer `apply`.
+3. Habilite a Data API externa somente após confirmar o plano. Não aplique essa configuração em produção nem no branch `TESTE` atual.
+4. Aplique e valide as migrations 025 e 026 no ambiente de staging antes do deploy do backend. A segunda faz a cópia aditiva de usuários e contas.
+5. Teste cadastro/convite, confirmação, login, sessão, redefinição, logout, permissões e PIN operacional com contas de teste.
 
-## Segurança e escopo
+O schema `connect_auth` é aditivo e a migration mantém `neon_auth`. O provedor Data API não pode ser trocado in-place. Planeje backup e rollback antes do corte.
+## Identidades existentes
 
-O serviço permite CORS somente para as origens configuradas. CORS não substitui autenticação: provisionamento exige sessão administrativa Neon e o login exige código/PIN válido. O backend mantém limites de corpo da requisição e registra falhas sem escrever segredos nos logs.
+A consulta read-only no branch `TESTE` confirmou o esquema das tabelas Neon Auth `user` e `account`, incluindo o campo `password`. A migration `202610300026_copy_neon_auth_identities.sql` copia usuários, contas e hashes sem transformar valores, mantendo a origem intacta. A compatibilidade dos hashes precisa ser testada com contas de staging. Sessões, verificações pendentes e chaves JWKS não são copiadas; usuários entram novamente e recebem chaves novas. Se uma senha antiga não for aceita, conduza redefinição de senha e não remova `neon_auth`.
 
-O restante do aplicativo continua acessando Neon Auth e a Data API diretamente do navegador, com as permissões e RLS do banco. Este deploy não aplica migrations, não altera o banco e não move o coordenador SQLite para o Render.
+## VerificaÃ§Ã£o
+
+`GET /health` valida somente o processo HTTP. Valide autenticaÃ§Ã£o e banco com os testes de staging apÃ³s configurar os serviÃ§os e executar as migrations com autorizaÃ§Ã£o. Nunca use produÃ§Ã£o para a primeira validaÃ§Ã£o.

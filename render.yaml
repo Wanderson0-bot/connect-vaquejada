@@ -10,7 +10,13 @@ services:
     envVars:
       - key: DATABASE_URL
         sync: false
-      - key: NEON_AUTH_BASE_URL
+      - key: BETTER_AUTH_URL
+        sync: false
+      - key: BETTER_AUTH_SECRET
+        sync: false
+      - key: RESEND_API_KEY
+        sync: false
+      - key: AUTH_EMAIL_FROM
         sync: false
       - key: NEON_DATA_API_URL
         sync: false

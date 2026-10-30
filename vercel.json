@@ -4,6 +4,14 @@
   "outputDirectory": "dist",
   "rewrites": [
     {
+      "source": "/api/auth/:path*",
+      "destination": "https://connect-vaquejada-backend.onrender.com/api/auth/:path*"
+    },
+    {
+      "source": "/api/register",
+      "destination": "https://connect-vaquejada-backend.onrender.com/api/register"
+    },
+    {
       "source": "/(.*)",
       "destination": "/index.html"
     }

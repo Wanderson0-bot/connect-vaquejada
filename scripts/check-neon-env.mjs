@@ -19,20 +19,18 @@ function readUrl(name, protocols, { directNeon = false } = {}) {
   }
 }
 
-const hasFrontendEndpoints = Boolean(
-  readUrl("VITE_NEON_AUTH_BASE_URL", ["https:"]) &&
-  readUrl("VITE_NEON_DATA_API_URL", ["https:"]),
-);
-const hasFrontendBaseUrl = Boolean(readUrl("VITE_NEON_URL", ["https:"]));
-report(
-  "Frontend: VITE_NEON_AUTH_BASE_URL + VITE_NEON_DATA_API_URL ou VITE_NEON_URL",
-  hasFrontendEndpoints || hasFrontendBaseUrl,
-  "Configure os endpoints Neon públicos usados pelo frontend.",
-);
+report("Frontend: VITE_BACKEND_API_URL HTTPS", Boolean(readUrl("VITE_BACKEND_API_URL", ["https:"])), "Configure VITE_BACKEND_API_URL com o domínio Render.");
+report("Frontend: VITE_NEON_DATA_API_URL HTTPS", Boolean(readUrl("VITE_NEON_DATA_API_URL", ["https:"])), "Configure VITE_NEON_DATA_API_URL com a Data API do mesmo ambiente.");
 
-report("API: DATABASE_URL PostgreSQL", Boolean(readUrl("DATABASE_URL", ["postgres:", "postgresql:"])), "Configure DATABASE_URL no servidor.");
-report("API: NEON_AUTH_BASE_URL HTTPS", Boolean(readUrl("NEON_AUTH_BASE_URL", ["https:"])), "Configure NEON_AUTH_BASE_URL no servidor.");
-report("API: NEON_DATA_API_URL HTTPS", Boolean(readUrl("NEON_DATA_API_URL", ["https:"])), "Configure NEON_DATA_API_URL no servidor.");
+const backendDatabase = readUrl("DATABASE_URL", ["postgres:", "postgresql:"], { directNeon: true });
+report("Backend: DATABASE_URL aponta para Neon direto (sem -pooler)", Boolean(backendDatabase), "Configure DATABASE_URL com a conexão direta Neon, sem -pooler.");
+report("Backend: BETTER_AUTH_URL HTTPS", Boolean(readUrl("BETTER_AUTH_URL", ["https:"])), "Configure BETTER_AUTH_URL com o domínio público do backend.");
+report("Backend: BETTER_AUTH_SECRET com pelo menos 32 caracteres", (process.env.BETTER_AUTH_SECRET?.trim().length || 0) >= 32, "Configure um BETTER_AUTH_SECRET aleatório com pelo menos 32 caracteres.");
+report("Backend: RESEND_API_KEY presente", Boolean(process.env.RESEND_API_KEY?.trim()), "Configure RESEND_API_KEY no Render.");
+report("Backend: AUTH_EMAIL_FROM presente", Boolean(process.env.AUTH_EMAIL_FROM?.trim()), "Configure AUTH_EMAIL_FROM com remetente verificado.");
+report("Backend: NEON_DATA_API_URL HTTPS", Boolean(readUrl("NEON_DATA_API_URL", ["https:"])), "Configure NEON_DATA_API_URL para o mesmo branch Neon.");
+report("Backend: BACKEND_ALLOWED_ORIGINS HTTPS", Boolean((process.env.BACKEND_ALLOWED_ORIGINS || "").split(",").map((origin) => origin.trim()).filter((origin) => readUrlValue(origin))), "Configure BACKEND_ALLOWED_ORIGINS com as origens HTTPS exatas do frontend.");
+report("Neon Data API: BETTER_AUTH_JWKS_URL HTTPS", Boolean(readUrl("BETTER_AUTH_JWKS_URL", ["https:"])), "Configure BETTER_AUTH_JWKS_URL no planejamento externo da Data API.");
 report(
   "API: EVENT_ACCESS_PASSWORD_SECRET com pelo menos 32 caracteres",
   (process.env.EVENT_ACCESS_PASSWORD_SECRET?.length || 0) >= 32,
@@ -57,4 +55,12 @@ if (problems.length) {
   process.exitCode = 1;
 } else {
   console.log("Preflight local concluído: variáveis presentes e com formato esperado; nenhuma conexão foi aberta.");
+}
+
+function readUrlValue(raw) {
+  if (!raw || /(?:SUBSTITUA|USUARIO|SENHA|SEU-PROJETO|YOUR[_-]?PROJECT|CHANGE_ME)/i.test(raw)) return null;
+  try {
+    const url = new URL(raw);
+    return url.protocol === "https:" && url.hostname.toLowerCase() !== "" && !url.hostname.toLowerCase().endsWith(".example") ? url : null;
+  } catch { return null; }
 }

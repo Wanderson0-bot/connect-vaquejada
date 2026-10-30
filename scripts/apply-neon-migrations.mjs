@@ -45,8 +45,8 @@ async function loadMigrations() {
     .filter((name) => name.endsWith(".sql"))
     .sort((left, right) => left.localeCompare(right, "en"));
 
-  if (names.length !== 25 || names[0] !== "000_neon_identity_compat.sql" || !names.includes("202610250023_legacy_staff_access_cutover.sql") || names.at(-1) !== "202610250024_harden_auth_identity_link.sql") {
-    throw new Error("Esperava 000_neon_identity_compat.sql, as 22 migrations históricas e as migrations Neon 023/024 em neon/migrations/.");
+  if (names.length !== 27 || names[0] !== "000_neon_identity_compat.sql" || !names.includes("202610250023_legacy_staff_access_cutover.sql") || !names.includes("202610250024_harden_auth_identity_link.sql") || !names.includes("202610300025_self_managed_better_auth.sql") || names.at(-1) !== "202610300026_copy_neon_auth_identities.sql") {
+    throw new Error("Esperava 000_neon_identity_compat.sql, as 22 migrations históricas e as migrations Neon 023/024 e as migrations 025/026 de autentica��o em neon/migrations/.");
   }
   if (names.slice(1).some((name) => !/^\d{12}_[a-z0-9_-]+\.sql$/i.test(name))) {
     throw new Error("Há arquivo SQL fora do padrão de migration numerada em neon/migrations/.");

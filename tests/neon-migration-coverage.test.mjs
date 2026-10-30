@@ -3,8 +3,9 @@ import { spawnSync } from "node:child_process";
 import { readdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import test from "node:test";
-import { createClient, BetterAuthVanillaAdapter, SupabaseAuthAdapter } from "@neondatabase/neon-js";
-import { createAuthClient } from "@neondatabase/neon-js/auth";
+import { createAuthClient } from "better-auth/client";
+import { jwtClient } from "better-auth/client/plugins";
+import packageJson from "../package.json" with { type: "json" };
 
 async function sourceFiles(directory) {
   const entries = await readdir(directory, { withFileTypes: true });
@@ -49,28 +50,42 @@ test("Neon migrations define the application tables and generated identities", (
   assert.equal(identityColumns.length, 7);
 });
 
-test("installed Neon SDK exposes every auth method used by the app", () => {
-  const authUrl = "https://auth.example.invalid";
-  const betterAuth = createAuthClient(authUrl, { adapter: BetterAuthVanillaAdapter() });
-  const neonClient = createClient({
-    auth: { url: authUrl, adapter: SupabaseAuthAdapter(), allowAnonymous: true },
-    dataApi: { url: "https://data.example.invalid" },
-  });
-
-  for (const method of ["requestPasswordReset", "resetPassword"]) {
-    assert.equal(typeof betterAuth[method], "function", `expected Better Auth method ${method}`);
+test("installed Better Auth client exposes the flows used by Connect", () => {
+  const client = createAuthClient({ baseURL: "https://backend.example.invalid", plugins: [jwtClient()] });
+  for (const method of ["getSession", "signIn", "signUp", "signOut", "requestPasswordReset", "resetPassword", "sendVerificationEmail", "token"]) {
+    assert.equal(typeof client[method], "function", `expected Better Auth client method ${method}`);
   }
-  assert.equal(typeof betterAuth.signUp.email, "function");
-  for (const method of ["getSession", "signInWithPassword", "signOut", "resend", "onAuthStateChange"]) {
-    assert.equal(typeof neonClient.auth[method], "function", `expected Neon Auth method ${method}`);
-  }
+  assert.equal(packageJson.dependencies["better-auth"], "1.7.14");
+  assert.equal(packageJson.dependencies["@neondatabase/neon-js"], undefined);
+  assert.equal(packageJson.dependencies["@neondatabase/auth"], undefined);
+  assert.equal(packageJson.dependencies["@neondatabase/auth-ui"], undefined);
 });
 
-test("event access provisions identities through the Neon Auth sign-up endpoint", async () => {
+test("event access provisions identities through the server-side Better Auth API", async () => {
   const handler = await readFile("backend/event-access.ts", "utf8");
-  assert.match(handler, /NEON_AUTH_BASE_URL/);
-  assert.match(handler, /\$\{authBaseUrl\}\/auth\/sign-up\/email/);
-  assert.doesNotMatch(handler, /\$\{authBaseUrl\}\/sign-up\/email/);
+  assert.match(handler, /auth\.api\.signUpEmail/);
+  assert.match(handler, /connect_auth\."user"/);
+  assert.doesNotMatch(handler, /NEON_AUTH_BASE_URL/);
+});
+
+test("Better Auth uses a persistent PostgreSQL connection and exposes external JWT keys", async () => {
+  const authConfig = await readFile("backend/auth.ts", "utf8");
+  const neonConfig = await readFile("neon.external-auth.ts", "utf8");
+  const schema = migrations.get("202610300025_self_managed_better_auth.sql");
+  const identityCopy = migrations.get("202610300026_copy_neon_auth_identities.sql");
+  assert.match(authConfig, /new Pool\(/);
+  assert.match(authConfig, /requireEmailVerification:\s*true/);
+  assert.match(authConfig, /minPasswordLength:\s*10/);
+  assert.match(authConfig, /plugins:\s*\[jwt\(/);
+  assert.match(neonConfig, /authProvider:\s*"external"/);
+  assert.match(neonConfig, /jwksUrl/);
+  for (const table of ["user", "session", "account", "verification", "jwks"]) {
+    assert.match(schema, new RegExp(`create table if not exists connect_auth\\."?${table}"?`, "i"));
+  }
+  assert.match(schema, /sync_current_app_user/);
+  assert.match(identityCopy, /insert into connect_auth\.account[\s\S]*?password[\s\S]*?from neon_auth\.account/i);
+  assert.match(identityCopy, /insert into connect_auth\."user"[\s\S]*?from neon_auth\."user"/i);
+  assert.doesNotMatch(identityCopy, /\b(?:delete\s+from|truncate|drop\s+table)\b/i);
 });
 
 test("every literal Data API RPC call has a function in the Neon migrations", () => {
@@ -96,10 +111,12 @@ test("every literal Data API table call has a table or view in the Neon migratio
 
 test("Neon migration set starts with compatibility and uses Neon identity helpers", () => {
   const sorted = [...migrationFiles].sort((left, right) => left.localeCompare(right, "en"));
-  assert.equal(sorted.length, 25);
+  assert.equal(sorted.length, 27);
   assert.equal(sorted[0], "000_neon_identity_compat.sql");
-  assert.equal(sorted.at(-2), "202610250023_legacy_staff_access_cutover.sql");
-  assert.equal(sorted.at(-1), "202610250024_harden_auth_identity_link.sql");
+  assert.ok(sorted.includes("202610250023_legacy_staff_access_cutover.sql"));
+  assert.ok(sorted.includes("202610250024_harden_auth_identity_link.sql"));
+  assert.equal(sorted.at(-2), "202610300025_self_managed_better_auth.sql");
+  assert.equal(sorted.at(-1), "202610300026_copy_neon_auth_identities.sql");
   assert.doesNotMatch(migrationSql, /\bauth\.(?:users|uid\s*\(|jwt\s*\(|role\s*\()/i);
   assert.match(migrationSql, /auth\.user_id\s*\(\s*\)/i);
 });
@@ -184,12 +201,12 @@ test("legacy access cutover preflight is read-only and mirrors its blocking cond
   assert.match(preflightSql, /not\s+trg\.tgisinternal/i);
 });
 
-test("final migration requires an explicit post-import confirmation before connecting", () => {
+test("the data-access cutover requires explicit confirmation before connecting", () => {
   const result = spawnSync(process.execPath, ["scripts/apply-neon-migrations.mjs", "--apply"], {
     encoding: "utf8", env: { PATH: process.env.PATH, SystemRoot: process.env.SystemRoot },
   });
 
   assert.equal(result.status, 1);
-  assert.match(result.stderr, /migration final de corte exige --confirm-data-import/);
+  assert.match(result.stderr, /migrations 023\/024 exigem --confirm-data-import/);
   assert.doesNotMatch(result.stderr, /DATABASE_URL|postgres(?:ql)?:\/\//i);
 });

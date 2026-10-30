@@ -1,4 +1,6 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
+import { toNodeHandler } from "better-auth/node";
+import { auth, pool } from "./auth.js";
 import eventAccessHandler from "./event-access.js";
 
 const port = Number.parseInt(process.env.PORT || "10000", 10);
@@ -9,6 +11,9 @@ function loadAllowedOrigins(): Set<string> {
     .split(",")
     .map((value) => value.trim())
     .filter(Boolean);
+  if (process.env.NODE_ENV !== "production") {
+    configured.push("http://localhost:5173", "http://127.0.0.1:5173");
+  }
   if (configured.length === 0) throw new Error("BACKEND_ALLOWED_ORIGINS precisa listar ao menos uma origem exata do frontend.");
 
   return new Set(configured.map((value) => {
@@ -24,6 +29,8 @@ function loadAllowedOrigins(): Set<string> {
 }
 
 const allowedOrigins = loadAllowedOrigins();
+const authHandler = toNodeHandler(auth.handler);
+const registrationAttempts = new Map<string, { count: number; resetAt: number }>();
 
 function sendJson(response: ServerResponse, status: number, body: unknown): void {
   response.statusCode = status;
@@ -41,10 +48,80 @@ function applyCors(request: IncomingMessage, response: ServerResponse): boolean 
     return false;
   }
   response.setHeader("Access-Control-Allow-Origin", origin);
-  response.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
-  response.setHeader("Access-Control-Allow-Headers", "Authorization, Content-Type");
+  response.setHeader("Access-Control-Allow-Credentials", "true");
+  response.setHeader("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS");
+  response.setHeader("Access-Control-Allow-Headers", "Authorization, Content-Type, X-Requested-With");
   response.setHeader("Access-Control-Max-Age", "600");
   return true;
+}
+
+function readClientIp(request: IncomingMessage): string {
+  return String(request.headers["x-forwarded-for"] || request.socket.remoteAddress || "unknown").split(",")[0].trim();
+}
+
+function registrationRateLimited(ip: string): boolean {
+  const now = Date.now();
+  const record = registrationAttempts.get(ip);
+  if (!record || record.resetAt <= now) {
+    registrationAttempts.set(ip, { count: 1, resetAt: now + 60_000 });
+    return false;
+  }
+  record.count += 1;
+  return record.count > 5;
+}
+
+async function handleRegistration(request: IncomingMessage, response: ServerResponse): Promise<void> {
+  if (request.method !== "POST") return sendJson(response, 405, { error: "Método não permitido." });
+  const ip = readClientIp(request);
+  if (registrationRateLimited(ip)) return sendJson(response, 429, { error: "Aguarde antes de tentar outro cadastro." });
+  let body: { email?: unknown; password?: unknown; invitationToken?: unknown; callbackURL?: unknown };
+  try { body = JSON.parse(await readRequestBody(request)); }
+  catch (error) {
+    if (error && typeof error === "object" && "statusCode" in error && error.statusCode === 413) {
+      return sendJson(response, 413, { error: "A solicitação excede o tamanho permitido." });
+    }
+    return sendJson(response, 400, { error: "Envie os dados em JSON válido." });
+  }
+  const email = typeof body.email === "string" ? body.email.trim().toLowerCase() : "";
+  const password = typeof body.password === "string" ? body.password : "";
+  const invitationToken = typeof body.invitationToken === "string" ? body.invitationToken.trim() : "";
+  const callbackURL = typeof body.callbackURL === "string" ? body.callbackURL : "";
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || password.length < 10 || password.length > 128 || invitationToken.length < 16 || invitationToken.length > 256) {
+    return sendJson(response, 400, { error: "Email, senha de pelo menos 10 caracteres e convite válido são obrigatórios." });
+  }
+  let callbackOrigin: string;
+  try { callbackOrigin = new URL(callbackURL).origin; }
+  catch { return sendJson(response, 400, { error: "Destino de confirmação inválido." }); }
+  if (!allowedOrigins.has(callbackOrigin)) return sendJson(response, 400, { error: "Destino de confirmação não autorizado." });
+  try {
+    const invited = await pool.query<{ allowed: boolean }>(
+      `select (
+        exists(select 1 from public.park_invitations i where i.token_hash=extensions.digest(convert_to($1,'UTF8'),'sha256') and lower(i.email)=lower($2) and i.accepted_at is null and i.revoked_at is null and i.expires_at>now())
+        or exists(select 1 from public.event_staff_invitations i where i.token_hash=extensions.digest(convert_to($1,'UTF8'),'sha256') and lower(i.email)=lower($2) and i.accepted_at is null and i.revoked_at is null and i.expires_at>now())
+      ) as allowed`, [invitationToken, email],
+    );
+    if (!invited.rows[0]?.allowed) return sendJson(response, 403, { error: "O convite é inválido, expirou ou pertence a outro email." });
+    const authHeaders = new Headers({
+      "content-type": "application/json",
+      origin: String(request.headers.origin || callbackOrigin),
+    });
+    const authRequest = new Request(`${process.env.BETTER_AUTH_URL!.replace(/\/$/, "")}/api/auth/sign-up/email`, {
+      method: "POST", headers: authHeaders,
+      body: JSON.stringify({ email, password, name: email.split("@")[0], callbackURL }),
+    });
+    const authResponse = await auth.handler(authRequest);
+    response.statusCode = authResponse.status;
+    authResponse.headers.forEach((value, key) => {
+      if (key.toLowerCase() !== "set-cookie") response.setHeader(key, value);
+    });
+    const cookies = authResponse.headers.getSetCookie?.() || [];
+    if (cookies.length) response.setHeader("Set-Cookie", cookies);
+    response.end(Buffer.from(await authResponse.arrayBuffer()));
+  } catch (error) {
+    const code = error && typeof error === "object" && "code" in error ? String(error.code) : "unknown";
+    console.error("Connect registration failed.", { code });
+    if (!response.headersSent) sendJson(response, 500, { error: "Não foi possível concluir o cadastro." });
+  }
 }
 
 async function readRequestBody(request: IncomingMessage): Promise<string> {
@@ -79,6 +156,24 @@ const server = createServer(async (request, response) => {
   if (pathname === "/health" && request.method === "GET") {
     response.setHeader("Cache-Control", "no-store");
     sendJson(response, 200, { status: "ok" });
+    return;
+  }
+  if (pathname.startsWith("/api/auth/")) {
+    if (request.method === "OPTIONS") {
+      response.statusCode = 204;
+      response.end();
+      return;
+    }
+    authHandler(request, response);
+    return;
+  }
+  if (pathname === "/api/register") {
+    if (request.method === "OPTIONS") {
+      response.statusCode = 204;
+      response.end();
+      return;
+    }
+    await handleRegistration(request, response);
     return;
   }
   if (pathname !== "/api/event-access") {
@@ -123,6 +218,14 @@ function shutdown(signal: string): void {
       console.error("Backend shutdown failed.", { name: error.name, code: Reflect.get(error, "code") });
       process.exitCode = 1;
     }
+    void pool.end().catch((poolError: unknown) => {
+      const value = poolError && typeof poolError === "object" ? poolError : {};
+      console.error("Backend database pool shutdown failed.", {
+        name: "name" in value ? String(value.name) : "Error",
+        code: "code" in value ? String(value.code) : "unknown",
+      });
+      process.exitCode = 1;
+    });
   });
 }
 

@@ -1,24 +1,31 @@
-import { BetterAuthVanillaAdapter, createClient, defaultDeriveNeonUrls, SupabaseAuthAdapter } from "@neondatabase/neon-js";
-import { createAuthClient } from "@neondatabase/neon-js/auth";
+import { PostgrestClient } from "@supabase/postgrest-js";
+import { createAuthClient } from "better-auth/client";
+import { jwtClient } from "better-auth/client/plugins";
 
-const url = import.meta.env.VITE_NEON_URL?.replace(/\/$/, "");
-const derivedUrls = url ? defaultDeriveNeonUrls(url) : null;
-const authUrl = import.meta.env.VITE_NEON_AUTH_BASE_URL?.replace(/\/$/, "") || derivedUrls?.auth || null;
-const dataApiUrl = import.meta.env.VITE_NEON_DATA_API_URL?.replace(/\/$/, "") || derivedUrls?.dataApi || null;
-const eventAccessApiUrl = import.meta.env.VITE_BACKEND_API_URL?.trim().replace(/\/+$/, "") || null;
-export const authProjectRef = (() => {
-  try { return new URL(authUrl || url || "").hostname.split(".")[0] || "desconhecido"; }
-  catch { return "desconhecido"; }
-})();
-export const backendConfigured = Boolean(authUrl && dataApiUrl);
-export const neonClient = authUrl && dataApiUrl
-  ? createClient({
-      auth: { url: authUrl, adapter: SupabaseAuthAdapter(), allowAnonymous: true },
-      dataApi: { url: dataApiUrl },
-    })
+const backendUrl = import.meta.env.VITE_BACKEND_API_URL?.trim().replace(/\/+$/, "") || null;
+const dataApiEnv = import.meta.env.VITE_NEON_DATA_API_URL?.trim().replace(/\/+$/, "") || null;
+const dataApiUrl = dataApiEnv
+  ? (dataApiEnv.endsWith("/rest/v1") ? dataApiEnv : `${dataApiEnv}/rest/v1`)
   : null;
-const neonAuth = authUrl
-  ? createAuthClient(authUrl, { adapter: BetterAuthVanillaAdapter() })
+const eventAccessApiUrl = backendUrl;
+export const authProjectRef = "Connect Vaquejada";
+export const backendConfigured = Boolean(backendUrl && dataApiUrl);
+const authClient = backendUrl ? createAuthClient({
+  baseURL: window.location.origin,
+  basePath: "/api/auth",
+  fetchOptions: { credentials: "include" },
+  plugins: [jwtClient()],
+}) : null;
+async function fetchWithConnectToken(input: RequestInfo | URL, init: RequestInit = {}) {
+  const headers = new Headers(init.headers);
+  if (authClient) {
+    const { data } = await authClient.token();
+    if (data?.token) headers.set("Authorization", `Bearer ${data.token}`);
+  }
+  return fetch(input, { ...init, headers });
+}
+export const neonClient = dataApiUrl
+  ? new PostgrestClient<any>(dataApiUrl, { fetch: fetchWithConnectToken })
   : null;
 
 export type AuthSession = {
@@ -112,50 +119,50 @@ export function clearOfflineParkCache(): void {
 }
 
 export async function currentSession(): Promise<AuthSession | null> {
-  if (!neonClient) return null;
-  const { data, error } = await neonClient.auth.getSession();
+  if (!authClient) return null;
+  const { data, error } = await authClient.getSession();
   if (error) throw error;
-  const session = data.session;
-  if (session && !syncedNeonUsers.has(session.user.id)) {
+  const active = data?.user;
+  if (!active) return null;
+  const { data: tokenData, error: tokenError } = await authClient.token();
+  if (tokenError) throw tokenError;
+  if (!tokenData?.token) return null;
+  if (!neonClient) throw new Error("Neon Data API is not configured.");
+  if (!syncedNeonUsers.has(active.id)) {
     const { error: syncError } = await neonClient.rpc("sync_current_app_user");
     if (syncError) throw syncError;
-    syncedNeonUsers.add(session.user.id);
+    syncedNeonUsers.add(active.id);
   }
-  return session;
+  return { access_token: tokenData.token, user: { id: active.id, email: active.email } };
 }
 export async function requirePlatformRole(required: PlatformContext["role"][]): Promise<PlatformContext> {
   const session = await currentSession();
-  if (!session) throw new Error("Sessão de autenticação ausente.");
+  if (!session) throw new Error("Authentication session is missing.");
   const context = await getPlatformContext();
-  if (!context || !required.includes(context.role)) {
-    throw new Error("Perfil sem autorização para executar esta operação.");
-  }
+  if (!context || !required.includes(context.role)) throw new Error("This profile is not authorized.");
   return context;
 }
 export async function signIn(email: string, password: string): Promise<AuthSession> {
-  if (!neonClient) throw new Error("Autenticação ainda não configurada.");
-  const { data, error } = await neonClient.auth.signInWithPassword({ email, password });
+  if (!authClient) throw new Error("Authentication is not configured.");
+  const { error } = await authClient.signIn.email({ email, password });
   if (error) throw error;
-  if (!data.session) throw new Error("A autenticação não retornou uma sessão ativa.");
-  return data.session;
+  const session = await currentSession();
+  if (!session) throw new Error("Authentication did not return an active session.");
+  window.dispatchEvent(new Event("connect-auth-statechange"));
+  return session;
 }
 export async function signInEventRole(accessCode: string, pin: string): Promise<AuthSession> {
-  if (!neonClient) throw new Error("Autenticação ainda não configurada.");
+  if (!authClient) throw new Error("Authentication is not configured.");
   const credentials = await requestEventAccess("login", {
     accessCode: accessCode.trim().toUpperCase(),
     pin: pin.trim(),
   }) as { email?: string; password?: string };
-  if (!credentials.email || !credentials.password) {
-    throw new Error("O serviço de acesso operacional não retornou credenciais válidas.");
-  }
+  if (!credentials.email || !credentials.password) throw new Error("Operational access service returned invalid credentials.");
   return signIn(credentials.email, credentials.password);
 }
-
 async function requestEventAccess(action: "login" | "provision", payload: Record<string, unknown>) {
   const session = await currentSession();
-  if (!eventAccessApiUrl) {
-    throw new Error("API operacional não configurada. Defina VITE_BACKEND_API_URL com a URL pública do backend no Render.");
-  }
+  if (!eventAccessApiUrl) throw new Error("Set VITE_BACKEND_API_URL to the public Render backend URL.");
   const response = await fetch(`${eventAccessApiUrl}/api/event-access`, {
     method: "POST",
     headers: {
@@ -165,59 +172,46 @@ async function requestEventAccess(action: "login" | "provision", payload: Record
     body: JSON.stringify({ action, ...payload }),
   });
   const data = await response.json().catch(() => null);
-  if (!response.ok) {
-    throw new Error(typeof data?.error === "string" ? data.error : "Não foi possível validar o acesso operacional.");
-  }
+  if (!response.ok) throw new Error(typeof data?.error === "string" ? data.error : "Could not validate operational access.");
   return data as Record<string, unknown>;
 }
 export async function signUp(email: string, password: string) {
-  if (!neonClient) throw new Error("Autenticação ainda não configurada.");
-  const nativeAuth = neonAuth as unknown as {
-    signUp: { email: (credentials: { email: string; password: string; name: string; callbackURL: string }) => Promise<{ error: { message?: string } | null }> };
-  };
-  const { error } = await nativeAuth.signUp.email({
-    email,
-    password,
-    name: email.split("@")[0] || "Connect",
-    callbackURL: `${window.location.origin}${window.location.pathname}`,
+  if (!authClient || !backendUrl) throw new Error("Authentication is not configured.");
+  const invitationToken = localStorage.getItem("connect-pdm-pending-invitation") ||
+    localStorage.getItem("connect-pdm-pending-event-invitation") || "";
+  const response = await fetch(`${window.location.origin}/api/register`, {
+    method: "POST", credentials: "include",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ email, password, invitationToken, callbackURL: `${window.location.origin}${window.location.pathname}` }),
   });
-  if (error) throw new Error(error.message || "Neon signup failed.");
-  const { data: sessionData, error: sessionError } = await neonClient.auth.getSession();
-  if (sessionError) throw sessionError;
-  return {
-    session: sessionData.session,
-    needsEmailConfirmation: !sessionData.session,
-    existingAccount: false,
-  };
+  const body = await response.json().catch(() => null) as { error?: string; needsEmailConfirmation?: boolean } | null;
+  if (!response.ok) throw new Error(body?.error || "Could not complete registration.");
+  const { data, error } = await authClient.getSession();
+  if (error) throw error;
+  return { session: await currentSession(), needsEmailConfirmation: body?.needsEmailConfirmation ?? !data?.user, existingAccount: false };
 }
 export async function resendSignupConfirmation(email: string) {
-  if (!neonClient) throw new Error("Autenticação ainda não configurada.");
-  const { error } = await neonClient.auth.resend({
-    type: "signup",
-    email,
-    options: { emailRedirectTo: `${window.location.origin}${window.location.pathname}` },
-  });
+  if (!authClient) throw new Error("Authentication is not configured.");
+  const { error } = await authClient.sendVerificationEmail({ email, callbackURL: `${window.location.origin}${window.location.pathname}` });
   if (error) throw error;
 }
 export async function signOut() {
-  if (!neonClient) return;
-  const { error } = await neonClient.auth.signOut();
+  if (!authClient) return;
+  const { error } = await authClient.signOut();
   if (error) throw error;
   syncedNeonUsers.clear();
+  window.dispatchEvent(new Event("connect-auth-statechange"));
 }
 export async function requestPasswordReset(email: string) {
-  if (!neonAuth) throw new Error("Autenticação Neon ainda não configurada.");
-  const { error } = await neonAuth.requestPasswordReset({
-    email,
-    redirectTo: `${window.location.origin}${window.location.pathname}`,
-  });
-  if (error) throw new Error(error.message || "Não foi possível enviar a redefinição de senha.");
+  if (!authClient) throw new Error("Authentication is not configured.");
+  const { error } = await authClient.requestPasswordReset({ email, redirectTo: `${window.location.origin}${window.location.pathname}` });
+  if (error) throw new Error(error.message || "Could not send password reset instructions.");
 }
 export async function updatePassword(password: string, token: string) {
-  if (!neonAuth) throw new Error("Autenticação Neon ainda não configurada.");
-  if (!token) throw new Error("O link de redefinição não contém um token válido. Solicite outro email.");
-  const { error } = await neonAuth.resetPassword({ newPassword: password, token });
-  if (error) throw new Error(error.message || "Não foi possível redefinir a senha.");
+  if (!authClient) throw new Error("Authentication is not configured.");
+  if (!token) throw new Error("The reset link has no valid token. Request another email.");
+  const { error } = await authClient.resetPassword({ newPassword: password, token });
+  if (error) throw new Error(error.message || "Could not reset the password.");
 }
 export async function getParkProfile(): Promise<ParkProfile | null> {
   if (!neonClient) return null;

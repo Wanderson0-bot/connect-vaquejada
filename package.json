@@ -23,19 +23,28 @@
   },
   "dependencies": {
     "@neon/env": "^1.6.6",
-    "@neondatabase/neon-js": "^0.9.0-beta",
     "@neondatabase/serverless": "^1.2.0",
+    "@supabase/postgrest-js": "2.79.0",
+    "better-auth": "1.7.14",
     "lucide-react": "^0.468.0",
+    "pg": "8.16.3",
     "react": "^18.3.1",
     "react-dom": "^18.3.1"
   },
   "devDependencies": {
     "@neon/config": "^1.9.5",
     "@types/node": "^22.20.5",
+    "@types/pg": "^8.23.1",
     "@types/react": "^18.3.12",
     "@types/react-dom": "^18.3.1",
     "@vitejs/plugin-react": "^4.3.4",
     "typescript": "^5.7.2",
     "vite": "^6.0.1"
+  },
+  "overrides": {
+    "zod": "4.6.7"
+  },
+  "allowScripts": {
+    "esbuild@0.25.12": true
   }
 }

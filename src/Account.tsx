@@ -16,7 +16,6 @@ import {
   updateParkProfile,
   requestPasswordReset,
   updatePassword,
-  neonClient,
   clearOfflineParkCache,
   acceptParkInvitation,
   createParkInvitation,
@@ -162,35 +161,14 @@ export function AccountGate({ children }: AccountProps) {
     return () => window.removeEventListener("online", revalidate);
   }, []);
   useEffect(() => {
-    if (!neonClient) return;
-    const {
-      data: { subscription },
-    } = neonClient.auth.onAuthStateChange((event, active) => {
-      if (event === "SIGNED_OUT") {
-        accountValidation.current += 1;
-        setSession(null);
-        setPark(null);
-        setPlatformContext(null);
-        setRecovery(false);
-        setLoading(false);
-        clearOfflineParkCache();
-        clearCoordinatorSettings();
-      }
-      if (event === "PASSWORD_RECOVERY") {
-        accountValidation.current += 1;
-        setSession(active);
-        setPark(null);
-        setRecovery(true);
-        setLoading(false);
-      }
-      if (event === "SIGNED_IN" || event === "TOKEN_REFRESHED") {
-        setSession(null);
-        setPark(null);
-        setPlatformContext(null);
-        void loadAccount();
-      }
-    });
-    return () => subscription.unsubscribe();
+    if (!backendConfigured) return;
+    const revalidate = () => void loadAccount();
+    window.addEventListener("connect-auth-statechange", revalidate);
+    window.addEventListener("focus", revalidate);
+    return () => {
+      window.removeEventListener("connect-auth-statechange", revalidate);
+      window.removeEventListener("focus", revalidate);
+    };
   }, []);
   useEffect(() => {
     if (!authEntryRoute || !session || loading) return;
@@ -232,7 +210,7 @@ export function AccountGate({ children }: AccountProps) {
       <AccountShell>
         <div className="account-card card form-card">
           <h2>Área protegida indisponível</h2>
-          <p>Configure as URLs VITE_NEON_AUTH_BASE_URL e VITE_NEON_DATA_API_URL do Neon para autenticar uma conta e consultar as permissões reais no servidor. O modo local deste aparelho não autentica usuários nem concede acesso a áreas internas.</p>
+          <p>Configure VITE_BACKEND_API_URL e VITE_NEON_DATA_API_URL para acessar a autenticação Connect e as permissões reais no servidor. O modo local deste aparelho não autentica usuários nem concede acesso a áreas internas.</p>
           <a className="secondary" href="/eventos">Voltar ao site público</a>
         </div>
       </AccountShell>
@@ -419,7 +397,7 @@ function AuthForm({
     setBusy(true);
     if (disabled) {
       setError(
-        "O backend do Connect ainda não está configurado. Defina VITE_NEON_AUTH_BASE_URL e VITE_NEON_DATA_API_URL e recarregue a página.",
+        "O backend do Connect ainda não está configurado. Defina VITE_BACKEND_API_URL e VITE_NEON_DATA_API_URL e recarregue a página.",
       );
       setBusy(false);
       return;
@@ -446,7 +424,7 @@ function AuthForm({
           setMessage("Esta conta já pode estar cadastrada. Entre com seu email ou use “Esqueci minha senha” para recuperar o acesso.");
         } else {
           setPendingConfirmationEmail(email);
-          setMessage("Cadastro recebido pelo Neon Auth. A entrega do email depende das configurações de envio do projeto. Confira a caixa de entrada e o spam; se não chegar, solicite outro email abaixo.");
+          setMessage("Cadastro recebido. A entrega do email depende da configuração do serviço de envio. Confira a caixa de entrada e o spam; se não chegar, solicite outro email abaixo.");
         }
         setRegister(false);
         return;
@@ -456,14 +434,14 @@ function AuthForm({
       const code = typeof reason === "object" && reason !== null && "code" in reason
         ? String((reason as { code?: unknown }).code || "")
         : "";
-      if (code === "invalid_credentials") {
+      if (["invalid_credentials", "invalid_email_or_password"].includes(code.toLowerCase())) {
         setError(connectRoute
-          ? `Email ou senha incorretos para o projeto Neon ${authProjectRef}. Confira se a redefinição de senha foi feita no mesmo projeto e se o navegador não preencheu uma senha antiga.`
+          ? `Email ou senha incorretos para o ${authProjectRef}. Confira se o navegador não preencheu uma senha antiga.`
           : canActivateInvitation
             ? "Email ou senha incorretos. Se ainda não criou a senha, volte para ‘Ativar convite’. Use o mesmo email que recebeu o convite."
             : "Email ou senha incorretos. Confira os dados ou use ‘Esqueci minha senha’ para redefinir a senha.");
-      } else if (code === "email_not_confirmed") {
-        setError("Confirme seu email pelo link enviado pelo Neon Auth e tente entrar novamente.");
+      } else if (["email_not_confirmed", "email_not_verified"].includes(code.toLowerCase())) {
+        setError("Confirme seu email pelo link enviado e tente entrar novamente.");
       } else {
         setError(
           reason instanceof Error
@@ -486,10 +464,10 @@ function AuthForm({
       const code = typeof reason === "object" && reason !== null && "code" in reason
         ? String((reason as { code?: unknown }).code || "") : "";
       setError(code === "over_email_send_rate_limit"
-        ? "O limite de envio de emails do Neon Auth foi atingido. Aguarde antes de tentar novamente ou configure o provedor de email do projeto."
+        ? "O limite de envio de emails foi atingido. Aguarde antes de tentar novamente."
         : code === "email_address_not_authorized"
-          ? "O provedor de email configurado no Neon Auth não autorizou esse destinatário. Confira as configurações do projeto."
-          : reason instanceof Error ? reason.message : "O Neon Auth não aceitou o reenvio. Confira as configurações de email do projeto.");
+          ? "O serviço de email não autorizou esse destinatário. Confira a configuração do domínio remetente."
+          : reason instanceof Error ? reason.message : "O serviço de autenticação não aceitou o reenvio. Confira a configuração de email.");
     } finally {
       setBusy(false);
     }
@@ -527,7 +505,7 @@ function AuthForm({
               name="password"
               type="password"
               required
-              minLength={8}
+              minLength={10}
               autoComplete={register ? "new-password" : "current-password"}
             />
           </AccountField>
@@ -626,7 +604,7 @@ function ResetPassword({ token, onDone }: { token: string; onDone: () => Promise
           <input
             name="password"
             type="password"
-            minLength={8}
+            minLength={10}
             autoComplete="new-password"
             required
           />

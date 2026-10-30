@@ -201,7 +201,7 @@ test("reconciliation snapshots do not grant or revoke, and activation needs revi
   assert.match(review, /reviewed_by=public\.current_app_user_id\(\)/i);
   assert.match(review, /evidence reference/i);
   assert.match(activate, /item\.classification<>'proven'/i);
-  assert.match(activate, /item\.reviewed_by=auth\.uid\(\)/i);
+  assert.match(activate, /item\.reviewed_by=public\.current_app_user_id\(\)/i);
   assert.match(activate, /Conflicting or inactive event membership/i);
   assert.match(activate, /insert into public\.event_staff_memberships/i);
   assert.doesNotMatch(reconciliation, /update public\.park_memberships|update public\.park_invitations/i);

@@ -1,4 +1,4 @@
-import { defineConfig } from "vite";
+import { defineConfig, loadEnv } from "vite";
 import react from "@vitejs/plugin-react";
 import { readdir, writeFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
@@ -33,7 +33,7 @@ function offlineServiceWorker() {
       const revision = createHash("sha256").update(files.join("\n")).digest("hex").slice(0, 12);
       const source = `const CACHE_NAME = "connect-pdm-shell-${revision}";
 const PRECACHE_URLS = ${JSON.stringify(files)};
-const API_PATHS = ["/rest/v1/", "/auth/v1/", "/storage/v1/"];
+const API_PATHS = ["/rest/v1/", "/api/auth/", "/api/register"];
 self.addEventListener("install", (event) => {
   event.waitUntil((async () => {
     const cache = await caches.open(CACHE_NAME);
@@ -83,4 +83,16 @@ self.addEventListener("fetch", (event) => {
   };
 }
 
-export default defineConfig({ plugins: [react(), offlineServiceWorker()] });
+export default defineConfig(({ mode }) => {
+  const env = loadEnv(mode, process.cwd(), "");
+  const backend = env.VITE_BACKEND_API_URL?.trim().replace(/\/+$/, "");
+  return {
+    plugins: [react(), offlineServiceWorker()],
+    server: backend ? {
+      proxy: {
+        "/api/auth": { target: backend, changeOrigin: true, secure: true },
+        "/api/register": { target: backend, changeOrigin: true, secure: true },
+      },
+    } : undefined,
+  };
+});

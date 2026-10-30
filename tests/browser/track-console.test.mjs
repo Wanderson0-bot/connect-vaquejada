@@ -187,7 +187,7 @@ test("Edge production UI: public home and anonymous protected-route denial", { t
     `export default { ...baseConfig, root: ${JSON.stringify(projectRoot)}, envDir: ${JSON.stringify(isolatedEnvDir)}, build: { ...baseConfig.build, outDir: ${JSON.stringify(isolatedBuildDir)}, emptyOutDir: true } };`,
     "",
   ].join("\n"), "utf8");
-  const previewEnv = { ...process.env, VITE_NEON_URL: "" };
+  const previewEnv = { ...process.env, VITE_NEON_DATA_API_URL: "", VITE_BACKEND_API_URL: "" };
   const build = spawn(process.execPath, [viteCli, "build", "--config", isolatedConfigPath, "--configLoader", "runner"], {
     cwd: projectRoot, env: previewEnv, windowsHide: true, stdio: ["ignore", "pipe", "pipe"],
   });
@@ -369,7 +369,7 @@ test("Edge production UI: public home and anonymous protected-route denial", { t
     }
 
     await navigate(`${baseUrl}eventos`);
-    await waitFor("public event calendar", async () => (await bodyText(page)).includes("Eventos públicos"));
+    await waitFor("public event calendar", async () => (await bodyText(page)).includes("Vaquejadas"));
     await page.call("Page.reload");
     await waitFor("direct public calendar refresh", async () => (await bodyText(page)).includes("Todos os eventos"));
     assert.match(await bodyText(page), /A consulta p.blica ainda n.o est. dispon.vel|Ainda n.o h. eventos publicados\./, "With Neon unset, the site must show actual unavailability or an empty list, never invented events.");
@@ -377,7 +377,7 @@ test("Edge production UI: public home and anonymous protected-route denial", { t
     for (const path of ["", "eventos", "eventos/invalid-id", "sobre", "contato"]) {
       const widthPaths = path ? `${baseUrl}${path}` : baseUrl;
       await navigate(widthPaths);
-      const expected = path === "" ? "TRADIÇÃO NA PISTA." : path === "eventos" ? "Eventos públicos" : path === "sobre" ? "Sobre o Connect" : path === "contato" ? "Fale com a gente" : "Evento público";
+      const expected = path === "" ? "TRADIÇÃO NA PISTA." : path === "eventos" ? "Vaquejadas" : path === "sobre" ? "Sobre o Connect" : path === "contato" ? "Fale com a gente" : "Evento público";
       await waitFor(`public page ${path || "/"}`, async () => (await bodyText(page)).includes(expected));
       assert.ok((await bodyText(page)).includes("Termos de Uso"), `Public footer must appear on ${path || "/"}.`);
       if (!path) {
