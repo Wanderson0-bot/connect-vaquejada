@@ -41,7 +41,7 @@ test("bootstrap administrativo serializa criação e impede reutilização após
 });
 
 test("cadastro bootstrap continua pelo Better Auth e o admin só é concedido após confirmar email", () => {
-  assert.match(backendServer, /admin_bootstrap_invitations i where i\.token_hash/);
+  assert.match(backendServer, /admin_bootstrap_invitations i where lower\(i\.email\)=lower\(\$2\)/);
   assert.match(backendServer, /api\/auth\/sign-up\/email/);
   assert.match(authService, /grantBootstrapAdminAfterVerification\(user, pool\)/);
   assert.match(bootstrap, /if \(!user\.emailVerified\) return/);
@@ -304,15 +304,19 @@ test("public event pages use the public RPC and never render administrative park
 test("Connect signup sends its scoped fields and validates confirmation", () => {
   assert.match(account, /pathname === "\/connect\/cadastro"/);
   assert.match(account, /href="\/connect\/cadastro">Criar conta/);
-  for (const field of ["fullName", "email", "password", "confirmationPassword", "invitationToken"]) assert.match(account, new RegExp(`name="${field}"`));
+  for (const field of ["fullName", "email", "password", "confirmationPassword"]) assert.match(account, new RegExp(`name="${field}"`));
+  assert.doesNotMatch(account, /<AccountField label="Token de convite"/);
+  assert.doesNotMatch(account, /new URLSearchParams\(window\.location\.hash\.slice\(1\)\)\.get\("convite"\)/);
   assert.match(account, /password !== confirmationPassword/);
-  assert.match(account, /registerConnectAdminAccount\(fullName, email, password, confirmationPassword, invitationToken\)/);
-  assert.match(backend, /registrationType: "connect_admin", name, email, password, confirmationPassword, invitationToken, callbackURL:.*\/connect/);
+  assert.match(account, /registerConnectAdminAccount\(fullName, email, password, confirmationPassword\)/);
+  assert.match(backend, /registrationType: "connect_admin", name, email, password, confirmationPassword, callbackURL:.*\/connect/);
+  assert.doesNotMatch(backend, /registerConnectAdminAccount[\s\S]{0,500}invitationToken/);
   assert.match(backendServer, /connectAdminRegistration && password !== confirmationPassword/);
 });
 
-test("Connect signup accepts only bootstrap invitations and keeps park/event invitation flows", () => {
+test("Connect signup is authorized by its configured email without a token, preserving park/event invitation flows", () => {
   assert.match(backendServer, /case when \$3::boolean then[\s\S]*admin_bootstrap_invitations[\s\S]*else[\s\S]*park_invitations[\s\S]*event_staff_invitations[\s\S]*end as allowed/);
+  assert.match(backendServer, /lower\(i\.email\)=lower\(\$2\) and i\.consumed_at is null and i\.expires_at>now\(\)/);
   assert.match(account, /const canActivateInvitation = !connectRoute && invitationMode/);
   assert.match(backend, /connect-pdm-pending-invitation/);
   assert.match(backend, /connect-pdm-pending-event-invitation/);

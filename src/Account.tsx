@@ -416,7 +416,6 @@ function AuthForm({
     const password = String(form.get("password") || "");
     const fullName = String(form.get("fullName") || "").trim();
     const confirmationPassword = String(form.get("confirmationPassword") || "");
-    const invitationToken = String(form.get("invitationToken") || "").trim();
     try {
       if (forgot) {
         await onReset(email);
@@ -429,7 +428,8 @@ function AuthForm({
         if (connectRegistrationRoute && register) {
           if (fullName.length < 3 || fullName.length > 100) throw new Error("Informe seu nome completo.");
           if (password !== confirmationPassword) throw new Error("A confirmação da senha não corresponde.");
-          const created = await registerConnectAdminAccount(fullName, email, password, confirmationPassword, invitationToken);
+          const created = await registerConnectAdminAccount(fullName, email, password, confirmationPassword);
+          window.history.replaceState(null, "", window.location.pathname);
           if (!created.session) {
             setPendingConfirmationEmail(email);
             setMessage("Cadastro recebido. Confirme seu email pelo link enviado para concluir a ativação da conta.");
@@ -514,7 +514,7 @@ function AuthForm({
             </h2>
             <p>
               {register
-                ? connectRegistrationRoute ? "Crie sua conta administrativa usando o convite enviado pela equipe Connect." : "Use o email que recebeu o convite para criar sua senha e ativar o acesso autorizado."
+                ? connectRegistrationRoute ? "Crie sua conta administrativa Connect com seus dados de acesso." : "Use o email que recebeu o convite para criar sua senha e ativar o acesso autorizado."
                 : connectRoute
                   ? "Entre com a conta autorizada da equipe Connect. O sistema confirma sua função antes de abrir o painel."
                   : "Entre com sua conta Connect. Depois de validar suas permissões, o sistema abrirá a área disponível para você."}
@@ -536,12 +536,7 @@ function AuthForm({
             />
           </AccountField>
         )}
-        {register && connectRegistrationRoute && !forgot && (
-          <>
-            <AccountField label="Confirme sua senha"><input name="confirmationPassword" type="password" required minLength={10} autoComplete="new-password" /></AccountField>
-            <AccountField label="Token de convite"><input name="invitationToken" type="text" required minLength={16} maxLength={256} autoComplete="off" /></AccountField>
-          </>
-        )}
+        {register && connectRegistrationRoute && !forgot && <AccountField label="Confirme sua senha"><input name="confirmationPassword" type="password" required minLength={10} autoComplete="new-password" /></AccountField>}
         {error && (
           <div className="account-error" role="alert">
             {error}

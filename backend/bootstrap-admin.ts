@@ -77,7 +77,7 @@ export async function handleBootstrapAdmin(request: IncomingMessage, response: S
       [email, bootstrapTokenHash(token), inviteLifetimeSeconds],
     );
     await client.query("commit");
-    sendJson(response, 201, { email, invitationToken: token, expiresAt: inserted.rows[0].expires_at });
+    sendJson(response, 201, { email, expiresAt: inserted.rows[0].expires_at });
   } catch (error) {
     await client?.query("rollback").catch(() => undefined);
     const code = error && typeof error === "object" && "code" in error ? String(error.code) : "unknown";

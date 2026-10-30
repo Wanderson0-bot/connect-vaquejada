@@ -90,7 +90,7 @@ async function handleRegistration(request: IncomingMessage, response: ServerResp
   const invitationToken = typeof body.invitationToken === "string" ? body.invitationToken.trim() : "";
   const callbackURL = typeof body.callbackURL === "string" ? body.callbackURL : "";
   const connectAdminRegistration = body.registrationType === "connect_admin";
-  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || password.length < 10 || password.length > 128 || invitationToken.length < 16 || invitationToken.length > 256 || ((connectAdminRegistration || body.name !== undefined) && (name.length < 3 || name.length > 100)) || (connectAdminRegistration && password !== confirmationPassword)) {
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || password.length < 10 || password.length > 128 || (!connectAdminRegistration && (invitationToken.length < 16 || invitationToken.length > 256)) || ((connectAdminRegistration || body.name !== undefined) && (name.length < 3 || name.length > 100)) || (connectAdminRegistration && password !== confirmationPassword)) {
     return sendJson(response, 400, { error: "Email, senha de pelo menos 10 caracteres e convite válido são obrigatórios." });
   }
   let callbackOrigin: string;
@@ -100,20 +100,25 @@ async function handleRegistration(request: IncomingMessage, response: ServerResp
   try {
     const invited = await pool.query<{ allowed: boolean }>(
       `select case when $3::boolean then
-        exists(select 1 from public.admin_bootstrap_invitations i where i.token_hash=extensions.digest(convert_to($1,'UTF8'),'sha256') and lower(i.email)=lower($2) and i.consumed_at is null and i.expires_at>now())
+        exists(select 1 from public.admin_bootstrap_invitations i where lower(i.email)=lower($2) and i.consumed_at is null and i.expires_at>now())
         else
         (exists(select 1 from public.park_invitations i where i.token_hash=extensions.digest(convert_to($1,'UTF8'),'sha256') and lower(i.email)=lower($2) and i.accepted_at is null and i.revoked_at is null and i.expires_at>now())
         or exists(select 1 from public.event_staff_invitations i where i.token_hash=extensions.digest(convert_to($1,'UTF8'),'sha256') and lower(i.email)=lower($2) and i.accepted_at is null and i.revoked_at is null and i.expires_at>now()))
       end as allowed`, [invitationToken, email, connectAdminRegistration],
     );
-    if (!invited.rows[0]?.allowed) return sendJson(response, 403, { error: "O convite é inválido, expirou ou pertence a outro email." });
-    await pool.query(
-      `update public.admin_bootstrap_invitations
-          set registration_started_at=coalesce(registration_started_at,now())
-        where token_hash=extensions.digest(convert_to($1,'UTF8'),'sha256')
-          and lower(email)=lower($2) and consumed_at is null and expires_at>now()`,
-      [invitationToken, email],
-    );
+    if (!invited.rows[0]?.allowed) return sendJson(response, 403, {
+      error: connectAdminRegistration
+        ? "O cadastro ainda não está autorizado para este email. Solicite a configuração inicial ao responsável Connect."
+        : "O convite é inválido, expirou ou pertence a outro email.",
+    });
+    if (connectAdminRegistration) {
+      await pool.query(
+        `update public.admin_bootstrap_invitations
+            set registration_started_at=coalesce(registration_started_at,now())
+          where lower(email)=lower($1) and consumed_at is null and expires_at>now()`,
+        [email],
+      );
+    }
     const authHeaders = new Headers({
       "content-type": "application/json",
       origin: String(request.headers.origin || callbackOrigin),
