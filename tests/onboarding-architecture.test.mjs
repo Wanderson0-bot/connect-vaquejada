@@ -300,3 +300,21 @@ test("public event pages use the public RPC and never render administrative park
   const publicRpc = publicPublicationMigration.match(/create or replace function public\.list_public_events\([\s\S]*?\$\$;/i)?.[0] ?? "";
   assert.doesNotMatch(publicRpc, /manager_name|phone|owner_user_id|entries|payment|audit/i);
 });
+
+test("Connect signup sends its scoped fields and validates confirmation", () => {
+  assert.match(account, /pathname === "\/connect\/cadastro"/);
+  assert.match(account, /href="\/connect\/cadastro">Criar conta/);
+  for (const field of ["fullName", "email", "password", "confirmationPassword", "invitationToken"]) assert.match(account, new RegExp(`name="${field}"`));
+  assert.match(account, /password !== confirmationPassword/);
+  assert.match(account, /registerConnectAdminAccount\(fullName, email, password, confirmationPassword, invitationToken\)/);
+  assert.match(backend, /registrationType: "connect_admin", name, email, password, confirmationPassword, invitationToken, callbackURL:.*\/connect/);
+  assert.match(backendServer, /connectAdminRegistration && password !== confirmationPassword/);
+});
+
+test("Connect signup accepts only bootstrap invitations and keeps park/event invitation flows", () => {
+  assert.match(backendServer, /case when \$3::boolean then[\s\S]*admin_bootstrap_invitations[\s\S]*else[\s\S]*park_invitations[\s\S]*event_staff_invitations[\s\S]*end as allowed/);
+  assert.match(account, /const canActivateInvitation = !connectRoute && invitationMode/);
+  assert.match(backend, /connect-pdm-pending-invitation/);
+  assert.match(backend, /connect-pdm-pending-event-invitation/);
+  assert.match(backend, /async function signUp\(email: string, password: string\)/);
+});

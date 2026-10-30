@@ -75,7 +75,7 @@ async function handleRegistration(request: IncomingMessage, response: ServerResp
   if (request.method !== "POST") return sendJson(response, 405, { error: "Método não permitido." });
   const ip = readClientIp(request);
   if (registrationRateLimited(ip)) return sendJson(response, 429, { error: "Aguarde antes de tentar outro cadastro." });
-  let body: { email?: unknown; password?: unknown; invitationToken?: unknown; callbackURL?: unknown };
+  let body: { registrationType?: unknown; name?: unknown; email?: unknown; password?: unknown; confirmationPassword?: unknown; invitationToken?: unknown; callbackURL?: unknown };
   try { body = JSON.parse(await readRequestBody(request)); }
   catch (error) {
     if (error && typeof error === "object" && "statusCode" in error && error.statusCode === 413) {
@@ -84,10 +84,13 @@ async function handleRegistration(request: IncomingMessage, response: ServerResp
     return sendJson(response, 400, { error: "Envie os dados em JSON válido." });
   }
   const email = typeof body.email === "string" ? body.email.trim().toLowerCase() : "";
+  const name = typeof body.name === "string" ? body.name.trim() : "";
   const password = typeof body.password === "string" ? body.password : "";
+  const confirmationPassword = typeof body.confirmationPassword === "string" ? body.confirmationPassword : "";
   const invitationToken = typeof body.invitationToken === "string" ? body.invitationToken.trim() : "";
   const callbackURL = typeof body.callbackURL === "string" ? body.callbackURL : "";
-  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || password.length < 10 || password.length > 128 || invitationToken.length < 16 || invitationToken.length > 256) {
+  const connectAdminRegistration = body.registrationType === "connect_admin";
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || password.length < 10 || password.length > 128 || invitationToken.length < 16 || invitationToken.length > 256 || ((connectAdminRegistration || body.name !== undefined) && (name.length < 3 || name.length > 100)) || (connectAdminRegistration && password !== confirmationPassword)) {
     return sendJson(response, 400, { error: "Email, senha de pelo menos 10 caracteres e convite válido são obrigatórios." });
   }
   let callbackOrigin: string;
@@ -96,11 +99,12 @@ async function handleRegistration(request: IncomingMessage, response: ServerResp
   if (!allowedOrigins.has(callbackOrigin)) return sendJson(response, 400, { error: "Destino de confirmação não autorizado." });
   try {
     const invited = await pool.query<{ allowed: boolean }>(
-      `select (
-        exists(select 1 from public.park_invitations i where i.token_hash=extensions.digest(convert_to($1,'UTF8'),'sha256') and lower(i.email)=lower($2) and i.accepted_at is null and i.revoked_at is null and i.expires_at>now())
-        or exists(select 1 from public.event_staff_invitations i where i.token_hash=extensions.digest(convert_to($1,'UTF8'),'sha256') and lower(i.email)=lower($2) and i.accepted_at is null and i.revoked_at is null and i.expires_at>now())
-        or exists(select 1 from public.admin_bootstrap_invitations i where i.token_hash=extensions.digest(convert_to($1,'UTF8'),'sha256') and lower(i.email)=lower($2) and i.consumed_at is null and i.expires_at>now())
-      ) as allowed`, [invitationToken, email],
+      `select case when $3::boolean then
+        exists(select 1 from public.admin_bootstrap_invitations i where i.token_hash=extensions.digest(convert_to($1,'UTF8'),'sha256') and lower(i.email)=lower($2) and i.consumed_at is null and i.expires_at>now())
+        else
+        (exists(select 1 from public.park_invitations i where i.token_hash=extensions.digest(convert_to($1,'UTF8'),'sha256') and lower(i.email)=lower($2) and i.accepted_at is null and i.revoked_at is null and i.expires_at>now())
+        or exists(select 1 from public.event_staff_invitations i where i.token_hash=extensions.digest(convert_to($1,'UTF8'),'sha256') and lower(i.email)=lower($2) and i.accepted_at is null and i.revoked_at is null and i.expires_at>now()))
+      end as allowed`, [invitationToken, email, connectAdminRegistration],
     );
     if (!invited.rows[0]?.allowed) return sendJson(response, 403, { error: "O convite é inválido, expirou ou pertence a outro email." });
     await pool.query(
@@ -116,7 +120,7 @@ async function handleRegistration(request: IncomingMessage, response: ServerResp
     });
     const authRequest = new Request(`${process.env.BETTER_AUTH_URL!.replace(/\/$/, "")}/api/auth/sign-up/email`, {
       method: "POST", headers: authHeaders,
-      body: JSON.stringify({ email, password, name: email.split("@")[0], callbackURL }),
+      body: JSON.stringify({ email, password, name: name || email.split("@")[0], callbackURL }),
     });
     const authResponse = await auth.handler(authRequest);
     response.statusCode = authResponse.status;

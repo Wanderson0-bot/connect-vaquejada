@@ -190,6 +190,19 @@ export async function signUp(email: string, password: string) {
   if (error) throw error;
   return { session: await currentSession(), needsEmailConfirmation: body?.needsEmailConfirmation ?? !data?.user, existingAccount: false };
 }
+export async function registerConnectAdminAccount(name: string, email: string, password: string, confirmationPassword: string, invitationToken: string) {
+  if (!authClient || !backendUrl) throw new Error("Authentication is not configured.");
+  const response = await fetch(`${backendUrl}/api/register`, {
+    method: "POST", credentials: "include",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ registrationType: "connect_admin", name, email, password, confirmationPassword, invitationToken, callbackURL: `${window.location.origin}/connect` }),
+  });
+  const body = await response.json().catch(() => null) as { error?: string; needsEmailConfirmation?: boolean } | null;
+  if (!response.ok) throw new Error(body?.error || "Could not complete registration.");
+  const { data, error } = await authClient.getSession();
+  if (error) throw error;
+  return { session: await currentSession(), needsEmailConfirmation: body?.needsEmailConfirmation ?? !data?.user };
+}
 export async function resendSignupConfirmation(email: string) {
   if (!authClient) throw new Error("Authentication is not configured.");
   const { error } = await authClient.sendVerificationEmail({ email, callbackURL: `${window.location.origin}${window.location.pathname}` });

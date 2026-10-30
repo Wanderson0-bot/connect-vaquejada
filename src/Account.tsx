@@ -12,6 +12,7 @@ import {
   signIn,
   signOut,
   signUp,
+  registerConnectAdminAccount,
   resendSignupConfirmation,
   updateParkProfile,
   requestPasswordReset,
@@ -64,6 +65,8 @@ export function AccountGate({ children }: AccountProps) {
   const [recovery, setRecovery] = useState(false);
   const accountValidation = useRef(0);
   const connectRoute = window.location.pathname === "/connect" || window.location.pathname === "/connect/" || window.location.pathname.startsWith("/connect/");
+  const connectRegistrationRoute = window.location.pathname === "/connect/cadastro";
+  const connectLoginRoute = window.location.pathname === "/connect" || window.location.pathname === "/connect/";
   const authEntryRoute = window.location.pathname === "/entrar";
 
   async function loadAccount() {
@@ -331,6 +334,8 @@ export function AccountGate({ children }: AccountProps) {
       error={error}
       message={message}
       connectRoute={connectRoute}
+      connectRegistrationRoute={connectRegistrationRoute}
+      showConnectCreateAccount={connectLoginRoute}
       setError={setError}
       setMessage={setMessage}
       onReset={async (email) => {
@@ -368,6 +373,8 @@ function AuthForm({
   setError,
   setMessage,
   connectRoute = false,
+  connectRegistrationRoute = false,
+  showConnectCreateAccount = false,
   onAuthenticated,
   onReset,
   invitationMode = false,
@@ -376,6 +383,8 @@ function AuthForm({
   error: string;
   message: string;
   connectRoute?: boolean;
+  connectRegistrationRoute?: boolean;
+  showConnectCreateAccount?: boolean;
   setError: (value: string) => void;
   setMessage: (value: string) => void;
   onAuthenticated: (session: AuthSession) => Promise<void>;
@@ -383,10 +392,10 @@ function AuthForm({
   invitationMode?: boolean;
   disabled?: boolean;
 }) {
-  // The Connect panel is for existing platform accounts only. Invitations are
-  // activated in the park/event area, never from /connect.
+  // Park/event invitation activation stays scoped to its existing access flow;
+  // Connect registration has its own route and accepts only bootstrap tokens.
   const canActivateInvitation = !connectRoute && invitationMode;
-  const [register, setRegister] = useState(canActivateInvitation);
+  const [register, setRegister] = useState(canActivateInvitation || connectRegistrationRoute);
   const [forgot, setForgot] = useState(false);
   const [busy, setBusy] = useState(false);
   const [pendingConfirmationEmail, setPendingConfirmationEmail] = useState("");
@@ -405,6 +414,9 @@ function AuthForm({
     const form = new FormData(event.currentTarget);
     const email = String(form.get("email") || "").trim();
     const password = String(form.get("password") || "");
+    const fullName = String(form.get("fullName") || "").trim();
+    const confirmationPassword = String(form.get("confirmationPassword") || "");
+    const invitationToken = String(form.get("invitationToken") || "").trim();
     try {
       if (forgot) {
         await onReset(email);
@@ -414,6 +426,19 @@ function AuthForm({
         return;
       }
       if (!register || !canActivateInvitation) {
+        if (connectRegistrationRoute && register) {
+          if (fullName.length < 3 || fullName.length > 100) throw new Error("Informe seu nome completo.");
+          if (password !== confirmationPassword) throw new Error("A confirmação da senha não corresponde.");
+          const created = await registerConnectAdminAccount(fullName, email, password, confirmationPassword, invitationToken);
+          if (!created.session) {
+            setPendingConfirmationEmail(email);
+            setMessage("Cadastro recebido. Confirme seu email pelo link enviado para concluir a ativação da conta.");
+            setRegister(false);
+            return;
+          }
+          await onAuthenticated(created.session);
+          return;
+        }
         await onAuthenticated(await signIn(email, password));
         return;
       }
@@ -482,20 +507,21 @@ function AuthForm({
           <div>
             <h2>
               {register
-                ? "Ativar convite"
+                ? connectRegistrationRoute ? "Criar conta Connect" : "Ativar convite"
                 : forgot
                 ? "Redefinir senha"
                 : connectRoute ? "Entrar no painel Connect" : "Acessar o Connect PDM"}
             </h2>
             <p>
               {register
-                ? "Use o email que recebeu o convite para criar sua senha e ativar o acesso autorizado."
+                ? connectRegistrationRoute ? "Crie sua conta administrativa usando o convite enviado pela equipe Connect." : "Use o email que recebeu o convite para criar sua senha e ativar o acesso autorizado."
                 : connectRoute
                   ? "Entre com a conta autorizada da equipe Connect. O sistema confirma sua função antes de abrir o painel."
                   : "Entre com sua conta Connect. Depois de validar suas permissões, o sistema abrirá a área disponível para você."}
             </p>
           </div>
         </div>
+        {register && connectRegistrationRoute && <AccountField label="Nome completo"><input name="fullName" type="text" required minLength={3} maxLength={100} autoComplete="name" /></AccountField>}
         <AccountField label="Email de acesso">
           <input name="email" type="email" required autoComplete="email" />
         </AccountField>
@@ -510,6 +536,12 @@ function AuthForm({
             />
           </AccountField>
         )}
+        {register && connectRegistrationRoute && !forgot && (
+          <>
+            <AccountField label="Confirme sua senha"><input name="confirmationPassword" type="password" required minLength={10} autoComplete="new-password" /></AccountField>
+            <AccountField label="Token de convite"><input name="invitationToken" type="text" required minLength={16} maxLength={256} autoComplete="off" /></AccountField>
+          </>
+        )}
         {error && (
           <div className="account-error" role="alert">
             {error}
@@ -520,7 +552,7 @@ function AuthForm({
             {message}
           </div>
         )}
-        {pendingConfirmationEmail && !connectRoute && !register && !forgot && <button className="text-button" type="button" disabled={busy || disabled} onClick={() => void resendConfirmation()}>Reenviar email de confirmação para {pendingConfirmationEmail}</button>}
+        {pendingConfirmationEmail && (!connectRoute || connectRegistrationRoute) && !register && !forgot && <button className="text-button" type="button" disabled={busy || disabled} onClick={() => void resendConfirmation()}>Reenviar email de confirmação para {pendingConfirmationEmail}</button>}
         <button className="primary" disabled={busy || disabled} type="submit">
           <LogIn size={16} />
           {busy
@@ -545,6 +577,8 @@ function AuthForm({
             Esqueci minha senha
           </button>
         )}
+        {showConnectCreateAccount && !register && !forgot && <a className="text-button" href="/connect/cadastro">Criar conta</a>}
+        {connectRegistrationRoute && <a className="text-button" href="/connect">{register ? "JÃ¡ tenho conta · Entrar" : "Voltar ao login Connect"}</a>}
         {canActivateInvitation && (
           <button
             className="text-button"
