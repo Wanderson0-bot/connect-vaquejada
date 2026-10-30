@@ -1,6 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
+import { initGetIdField } from "../node_modules/better-auth/node_modules/@better-auth/core/dist/db/adapter/get-id-field.mjs";
 
 const migration = await readFile(new URL("../neon/migrations/202610220015_connect_pdm_operations.sql", import.meta.url), "utf8");
 const reconciliation = await readFile(new URL("../neon/migrations/202610220016_legacy_staff_reconciliation.sql", import.meta.url), "utf8");
@@ -24,7 +26,33 @@ const publicPublicationMigration = await readFile(new URL("../neon/migrations/20
 const parkCodeMigration = await readFile(new URL("../neon/migrations/202610250022_connect_park_code.sql", import.meta.url), "utf8");
 const bootstrap = await readFile(new URL("../backend/bootstrap-admin.ts", import.meta.url), "utf8");
 const authService = await readFile(new URL("../backend/auth.ts", import.meta.url), "utf8");
+const selfManagedAuthMigration = await readFile(new URL("../neon/migrations/202610300025_self_managed_better_auth.sql", import.meta.url), "utf8");
 const backendServer = await readFile(new URL("../backend/server.ts", import.meta.url), "utf8");
+
+test("Better Auth generates a non-null user ID before INSERT for PostgreSQL text keys", () => {
+  assert.match(authService, /import \{ randomUUID \} from "node:crypto"/);
+  assert.match(authService, /const generateAuthId = \(_context: \{ model: string; size\?: number \}\) => randomUUID\(\)/);
+  assert.match(authService, /database: \{ generateId: generateAuthId \}/);
+  assert.doesNotMatch(authService, /database: \{ generateId: "uuid" \}/);
+  assert.match(selfManagedAuthMigration, /id text primary key/);
+  assert.doesNotMatch(selfManagedAuthMigration, /id text primary key[^,]*default/i);
+
+  // Exercise Better Auth 1.7.14's adapter field builder with the same
+  // PostgreSQL UUID-support flag used by its Kysely adapter.
+  const idFieldFactory = initGetIdField({
+    schema: { user: { fields: {} } },
+    options: { advanced: { database: { generateId: (_context) => randomUUID() } } },
+    supportsUUIDs: true,
+  });
+  const idField = idFieldFactory({ customModelName: "user", forceAllowId: true });
+  const generatedId = idField.defaultValue?.();
+  const insertId = idField.transform.input(generatedId);
+
+  assert.equal(idField.required, true);
+  assert.match(generatedId ?? "", /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i);
+  assert.equal(insertId, generatedId);
+  assert.notEqual(insertId, undefined);
+});
 
 test("bootstrap administrativo exige segredo e bloqueia acesso não autorizado antes do banco", () => {
   assert.match(bootstrap, /ADMIN_BOOTSTRAP_SECRET/);

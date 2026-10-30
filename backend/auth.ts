@@ -1,5 +1,6 @@
 import { betterAuth } from "better-auth";
 import { jwt } from "better-auth/plugins";
+import { randomUUID } from "node:crypto";
 import { Pool } from "pg";
 import { grantBootstrapAdminAfterVerification } from "./bootstrap-admin.js";
 
@@ -23,6 +24,10 @@ const pool = new Pool({
   options: "-c search_path=connect_auth,public",
   max: 5,
 });
+// The Kysely PostgreSQL adapter treats `generateId: "uuid"` as database-side
+// UUID generation. connect_auth uses TEXT primary keys without DB defaults,
+// so provide the UUID in the application before the adapter builds the INSERT.
+const generateAuthId = (_context: { model: string; size?: number }) => randomUUID();
 
 async function sendAuthEmail(to: string, subject: string, text: string, html: string) {
   const key = required("RESEND_API_KEY");
@@ -42,7 +47,7 @@ export const auth = betterAuth({
   trustedOrigins: [...new Set([...allowedOrigins, appUrl])],
   database: pool,
   advanced: {
-    database: { generateId: "uuid" },
+    database: { generateId: generateAuthId },
     useSecureCookies: appUrl.startsWith("https://"),
     defaultCookieAttributes: {
       httpOnly: true,
