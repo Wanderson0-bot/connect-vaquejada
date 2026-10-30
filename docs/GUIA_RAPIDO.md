@@ -8,11 +8,13 @@
 | Administrar a plataforma e os parques | `/connect` | Equipe Connect com função administrativa ativa |
 | Operar um parque ou evento | `/operacao` | Conta com vínculo e permissões ativos |
 
-O endereço da página só abre a tela. Ele não concede acesso: o Supabase valida a sessão e a permissão.
+O endereço da página só abre a tela. Ele não concede acesso: Neon Auth valida a sessão e o Neon PostgreSQL aplica as permissões por meio da Data API e das policies RLS.
+
+O modo conectado só funciona depois que Auth, Data API e as migrations do Connect estiverem configurados no projeto Neon. Consulte [Migração para Neon](./MIGRACAO_NEON.md) para os pré-requisitos e o estado da homologação.
 
 ## Primeiro acesso da equipe Connect
 
-1. Crie a conta da pessoa em Supabase Auth.
+1. Crie a conta da pessoa no Neon Auth.
 2. Um operador confiável do banco precisa conceder a primeira função `platform_admin`. O aplicativo não oferece autoprovisionamento administrativo.
 3. Entre no site com essa conta e abra `/connect`.
 4. No painel, escolha **Parques → Cadastrar primeiro parque**.
@@ -41,15 +43,15 @@ Resultados e totais provisórios não equivalem a classificação oficial. A tel
 
 ## Entenda onde os dados ficam
 
-- **Supabase conectado:** autenticação e dados remotos sujeitos às políticas e permissões do servidor.
+- **Neon conectado:** autenticação Neon Auth e dados PostgreSQL sujeitos às policies e permissões do servidor.
 - **Local/IndexedDB:** dados guardados neste navegador e aparelho; não são login e não sincronizam entre dispositivos.
-- **Coordenador LAN:** pode compartilhar dados locais entre aparelhos configurados na rede; não significa sincronização com Supabase.
+- **Coordenador LAN:** pode compartilhar dados locais entre aparelhos configurados na rede; não significa sincronização com Neon.
 
 Observe o indicador de estado na operação. “Local”, “pendente”, “bloqueado” e “sincronizado” representam estados distintos; uma mensagem de sincronização só aparece depois de confirmação do serviço.
 
 ## Se um convite não funcionar
 
-- Entre com o mesmo email que recebeu o convite e confirme-o no Supabase.
+- Entre com o mesmo email que recebeu o convite e confirme-o no Neon Auth.
 - Para convite que exige confirmação, volte ao mesmo navegador onde abriu o link; o sistema guarda ali o token temporário até validar o acesso.
 - Convites expirados, revogados, usados por outro email ou incompatíveis com o perfil são recusados pelo servidor. Peça um novo convite ao administrador.
 - A tela exibe um link porque o envio automático por email ainda não está integrado.

@@ -5,16 +5,18 @@ import {
   ParkProfile,
   PlatformContext,
   backendConfigured,
+  authProjectRef,
   currentSession,
   getParkProfile,
   getPlatformContext,
   signIn,
   signOut,
   signUp,
+  resendSignupConfirmation,
   updateParkProfile,
   requestPasswordReset,
   updatePassword,
-  supabase,
+  neonClient,
   clearOfflineParkCache,
   acceptParkInvitation,
   createParkInvitation,
@@ -28,6 +30,21 @@ import { BrazilianPhoneInput, BrazilianStateOptions } from "./BrazilFields";
 const INVITATION_KEY = "connect-pdm-pending-invitation";
 const EVENT_INVITATION_KEY = "connect-pdm-pending-event-invitation";
 const ConnectAdminConsole = lazy(() => import("./ConnectAdmin").then((module) => ({ default: module.ConnectAdminConsole })));
+
+async function acceptPendingParkInvitation(token: string) {
+  try {
+    await acceptParkInvitation(token);
+  } catch (reason) {
+    const code = typeof reason === "object" && reason !== null && "code" in reason
+      ? String((reason as { code?: unknown }).code || "") : "";
+    const message = reason instanceof Error ? reason.message : "";
+    if (code === "42501" && message.toLowerCase().includes("invitation invalid, expired, revoked")) {
+      localStorage.removeItem(INVITATION_KEY);
+      throw new Error("O convite é inválido, expirou, foi revogado ou foi enviado para outro email. Confirme que entrou com o email convidado. Se o erro continuar, peça ao responsável um novo link de convite.");
+    }
+    throw reason;
+  }
+}
 
 type AccountProps = {
   children: (props: {
@@ -56,10 +73,12 @@ export function AccountGate({ children }: AccountProps) {
     setError("");
     try {
       const active = await currentSession();
+      const recoveryToken = new URLSearchParams(window.location.search).get("token");
       if (validationId !== accountValidation.current) return;
       setSession(null);
       setPark(null);
       setPlatformContext(null);
+      if (recoveryToken) setRecovery(true);
       if (
         (window.location.hash.includes("type=recovery") ||
           new URLSearchParams(window.location.search).has(
@@ -73,17 +92,19 @@ export function AccountGate({ children }: AccountProps) {
         setPlatformContext(null);
         return;
       }
-      const eventInvite = localStorage.getItem(EVENT_INVITATION_KEY);
-      if (eventInvite) {
-        await acceptEventStaffInvitation(eventInvite);
-        if (validationId !== accountValidation.current) return;
-        localStorage.removeItem(EVENT_INVITATION_KEY);
-      }
-      const invite = localStorage.getItem(INVITATION_KEY);
-      if (invite) {
-        await acceptParkInvitation(invite);
-        if (validationId !== accountValidation.current) return;
-        localStorage.removeItem(INVITATION_KEY);
+      if (!connectRoute) {
+        const eventInvite = localStorage.getItem(EVENT_INVITATION_KEY);
+        if (eventInvite) {
+          await acceptEventStaffInvitation(eventInvite);
+          if (validationId !== accountValidation.current) return;
+          localStorage.removeItem(EVENT_INVITATION_KEY);
+        }
+        const invite = localStorage.getItem(INVITATION_KEY);
+        if (invite) {
+          await acceptPendingParkInvitation(invite);
+          if (validationId !== accountValidation.current) return;
+          localStorage.removeItem(INVITATION_KEY);
+        }
       }
       const [nextPlatform, nextPark] = await Promise.all([
         getPlatformContext(),
@@ -117,14 +138,14 @@ export function AccountGate({ children }: AccountProps) {
     const params = new URLSearchParams(window.location.search);
     const eventInvite = params.get("eventInvite");
     if (eventInvite) {
-      localStorage.setItem(EVENT_INVITATION_KEY, eventInvite);
+      if (!connectRoute) localStorage.setItem(EVENT_INVITATION_KEY, eventInvite);
       params.delete("eventInvite");
       const query = params.toString();
       window.history.replaceState(null, "", `${window.location.pathname}${query ? `?${query}` : ""}`);
     }
     const invite = new URLSearchParams(window.location.search).get("invite");
     if (invite) {
-      localStorage.setItem(INVITATION_KEY, invite);
+      if (!connectRoute) localStorage.setItem(INVITATION_KEY, invite);
       const cleanParams = new URLSearchParams(window.location.search);
       cleanParams.delete("invite");
       const query = cleanParams.toString();
@@ -141,10 +162,10 @@ export function AccountGate({ children }: AccountProps) {
     return () => window.removeEventListener("online", revalidate);
   }, []);
   useEffect(() => {
-    if (!supabase) return;
+    if (!neonClient) return;
     const {
       data: { subscription },
-    } = supabase.auth.onAuthStateChange((event, active) => {
+    } = neonClient.auth.onAuthStateChange((event, active) => {
       if (event === "SIGNED_OUT") {
         accountValidation.current += 1;
         setSession(null);
@@ -211,7 +232,7 @@ export function AccountGate({ children }: AccountProps) {
       <AccountShell>
         <div className="account-card card form-card">
           <h2>Área protegida indisponível</h2>
-          <p>Configure e valide o Supabase Auth para autenticar uma conta e consultar as permissões reais no servidor. O modo local deste aparelho não autentica usuários nem concede acesso a áreas internas.</p>
+          <p>Configure as URLs VITE_NEON_AUTH_BASE_URL e VITE_NEON_DATA_API_URL do Neon para autenticar uma conta e consultar as permissões reais no servidor. O modo local deste aparelho não autentica usuários nem concede acesso a áreas internas.</p>
           <a className="secondary" href="/eventos">Voltar ao site público</a>
         </div>
       </AccountShell>
@@ -223,9 +244,11 @@ export function AccountGate({ children }: AccountProps) {
         <div className="empty">Conferindo sessão segura…</div>
       </AccountShell>
     );
-  if (recovery && session)
+  const recoveryToken = new URLSearchParams(window.location.search).get("token") || "";
+  if (recovery && (session || recoveryToken))
     return (
       <ResetPassword
+        token={recoveryToken}
         onDone={async () => {
           await handleSignOut();
           setRecovery(false);
@@ -336,15 +359,17 @@ export function AccountGate({ children }: AccountProps) {
         await requestPasswordReset(email);
       }}
       onAuthenticated={async (active) => {
-        const eventInvite = localStorage.getItem(EVENT_INVITATION_KEY);
-        if (eventInvite) {
-          await acceptEventStaffInvitation(eventInvite);
-          localStorage.removeItem(EVENT_INVITATION_KEY);
-        }
-        const invite = localStorage.getItem(INVITATION_KEY);
-        if (invite) {
-          await acceptParkInvitation(invite);
-          localStorage.removeItem(INVITATION_KEY);
+        if (!connectRoute) {
+          const eventInvite = localStorage.getItem(EVENT_INVITATION_KEY);
+          if (eventInvite) {
+            await acceptEventStaffInvitation(eventInvite);
+            localStorage.removeItem(EVENT_INVITATION_KEY);
+          }
+          const invite = localStorage.getItem(INVITATION_KEY);
+          if (invite) {
+            await acceptPendingParkInvitation(invite);
+            localStorage.removeItem(INVITATION_KEY);
+          }
         }
         const [nextPlatform, nextPark] = await Promise.all([
           getPlatformContext(),
@@ -380,9 +405,13 @@ function AuthForm({
   invitationMode?: boolean;
   disabled?: boolean;
 }) {
-  const [register, setRegister] = useState(invitationMode);
+  // The Connect panel is for existing platform accounts only. Invitations are
+  // activated in the park/event area, never from /connect.
+  const canActivateInvitation = !connectRoute && invitationMode;
+  const [register, setRegister] = useState(canActivateInvitation);
   const [forgot, setForgot] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [pendingConfirmationEmail, setPendingConfirmationEmail] = useState("");
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setError("");
@@ -390,7 +419,7 @@ function AuthForm({
     setBusy(true);
     if (disabled) {
       setError(
-        "O backend do Connect PDM ainda não está configurado. Defina VITE_SUPABASE_URL e VITE_SUPABASE_ANON_KEY e recarregue a página.",
+        "O backend do Connect ainda não está configurado. Defina VITE_NEON_AUTH_BASE_URL e VITE_NEON_DATA_API_URL e recarregue a página.",
       );
       setBusy(false);
       return;
@@ -406,29 +435,61 @@ function AuthForm({
         );
         return;
       }
-      if (!register) {
+      if (!register || !canActivateInvitation) {
         await onAuthenticated(await signIn(email, password));
         return;
       }
       const created = await signUp(email, password);
       if (!created.session) {
-        setMessage(
-          localStorage.getItem(EVENT_INVITATION_KEY)
-            ? "Conta criada. Confirme o email enviado pelo Supabase. Depois volte a esta página e entre com o mesmo email; o convite ficará guardado neste navegador até ser validado."
-            : localStorage.getItem(INVITATION_KEY)
-              ? "Conta criada. Confirme o email enviado pelo Supabase. Depois volte a esta página e entre com o mesmo email; o convite ficará guardado neste navegador até ser validado."
-              : "Conta criada. Confirme o email enviado pelo Supabase e depois entre para continuar.",
-        );
+        if (created.existingAccount) {
+          setPendingConfirmationEmail("");
+          setMessage("Esta conta já pode estar cadastrada. Entre com seu email ou use “Esqueci minha senha” para recuperar o acesso.");
+        } else {
+          setPendingConfirmationEmail(email);
+          setMessage("Cadastro recebido pelo Neon Auth. A entrega do email depende das configurações de envio do projeto. Confira a caixa de entrada e o spam; se não chegar, solicite outro email abaixo.");
+        }
         setRegister(false);
         return;
       }
       await onAuthenticated(created.session);
     } catch (reason) {
-      setError(
-        reason instanceof Error
-          ? reason.message
-          : "Não foi possível concluir o acesso.",
-      );
+      const code = typeof reason === "object" && reason !== null && "code" in reason
+        ? String((reason as { code?: unknown }).code || "")
+        : "";
+      if (code === "invalid_credentials") {
+        setError(connectRoute
+          ? `Email ou senha incorretos para o projeto Neon ${authProjectRef}. Confira se a redefinição de senha foi feita no mesmo projeto e se o navegador não preencheu uma senha antiga.`
+          : canActivateInvitation
+            ? "Email ou senha incorretos. Se ainda não criou a senha, volte para ‘Ativar convite’. Use o mesmo email que recebeu o convite."
+            : "Email ou senha incorretos. Confira os dados ou use ‘Esqueci minha senha’ para redefinir a senha.");
+      } else if (code === "email_not_confirmed") {
+        setError("Confirme seu email pelo link enviado pelo Neon Auth e tente entrar novamente.");
+      } else {
+        setError(
+          reason instanceof Error
+            ? reason.message
+            : "Não foi possível concluir o acesso.",
+        );
+      }
+    } finally {
+      setBusy(false);
+    }
+  }
+  async function resendConfirmation() {
+    if (!pendingConfirmationEmail) return;
+    setBusy(true);
+    setError("");
+    try {
+      await resendSignupConfirmation(pendingConfirmationEmail);
+      setMessage(`Solicitação de reenvio aceita para ${pendingConfirmationEmail}. Confira também o spam.`);
+    } catch (reason) {
+      const code = typeof reason === "object" && reason !== null && "code" in reason
+        ? String((reason as { code?: unknown }).code || "") : "";
+      setError(code === "over_email_send_rate_limit"
+        ? "O limite de envio de emails do Neon Auth foi atingido. Aguarde antes de tentar novamente ou configure o provedor de email do projeto."
+        : code === "email_address_not_authorized"
+          ? "O provedor de email configurado no Neon Auth não autorizou esse destinatário. Confira as configurações do projeto."
+          : reason instanceof Error ? reason.message : "O Neon Auth não aceitou o reenvio. Confira as configurações de email do projeto.");
     } finally {
       setBusy(false);
     }
@@ -446,7 +507,7 @@ function AuthForm({
                 ? "Ativar convite"
                 : forgot
                 ? "Redefinir senha"
-                : "Acessar o Connect PDM"}
+                : connectRoute ? "Entrar no painel Connect" : "Acessar o Connect PDM"}
             </h2>
             <p>
               {register
@@ -481,6 +542,7 @@ function AuthForm({
             {message}
           </div>
         )}
+        {pendingConfirmationEmail && !connectRoute && !register && !forgot && <button className="text-button" type="button" disabled={busy || disabled} onClick={() => void resendConfirmation()}>Reenviar email de confirmação para {pendingConfirmationEmail}</button>}
         <button className="primary" disabled={busy || disabled} type="submit">
           <LogIn size={16} />
           {busy
@@ -505,7 +567,7 @@ function AuthForm({
             Esqueci minha senha
           </button>
         )}
-        {invitationMode && (
+        {canActivateInvitation && (
           <button
             className="text-button"
             type="button"
@@ -525,7 +587,7 @@ function AuthForm({
   );
 }
 
-function ResetPassword({ onDone }: { onDone: () => Promise<void> }) {
+function ResetPassword({ token, onDone }: { token: string; onDone: () => Promise<void> }) {
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   return (
@@ -538,7 +600,7 @@ function ResetPassword({ onDone }: { onDone: () => Promise<void> }) {
           setError("");
           const data = new FormData(event.currentTarget);
           try {
-            await updatePassword(String(data.get("password") || ""));
+            await updatePassword(String(data.get("password") || ""), token);
             await onDone();
           } catch (reason) {
             setError(

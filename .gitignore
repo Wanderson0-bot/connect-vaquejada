@@ -1,6 +1,8 @@
 ﻿node_modules/
 dist/
+.render-build/
 *.tsbuildinfo
 .env
 .env.*
 !.env.example
+.neon

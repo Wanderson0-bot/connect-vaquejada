@@ -13,5 +13,5 @@ export function connectPathForView(view: ConnectView): string;
 export function isConnectPath(pathname: string): boolean;
 export function isPublicEventsPath(pathname: string): boolean;
 export function isPublicParkPath(pathname: string): boolean;
-export type PublicRoute = { type: "home" | "events" | "not-found" } | { type: "event" | "park"; id: string };
+export type PublicRoute = { type: "home" | "events" | "about" | "contact" | "not-found" } | { type: "event" | "park"; id: string };
 export function publicRouteForPath(pathname: string): PublicRoute;

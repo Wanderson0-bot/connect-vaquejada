@@ -1,5 +1,8 @@
 ﻿# Status da auditoria tÃ©cnica â€” Connect PDM
 
+> NOTA (2026-10-29): auditoria historica, anterior a migracao para Neon. Referencias a Supabase, arquivos e resultados refletem o estado daquela data; nao use como configuracao atual. Consulte [MIGRACAO_NEON.md](./MIGRACAO_NEON.md) para o estado e procedimento Neon.
+
+
 **Data:** 22/10/2026  
 **Escopo:** auditoria documental e estÃ¡tica do repositÃ³rio; nenhuma regra esportiva ou mÃ³dulo de produto foi alterado.
 

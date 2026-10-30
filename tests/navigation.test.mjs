@@ -40,13 +40,13 @@ test("rotas operacionais resolvem páginas e preservam atalhos da secretaria e p
   assert.equal(operationTabForPath("/operacao/"), "overview");
   assert.equal(operationTabForPath("/operacao/inscricoes"), "entries");
   assert.equal(operationTabForPath("/operacao/pista"), "track");
-  assert.equal(operationTabForArea("office"), "entries");
+  assert.equal(operationTabForArea("office"), "overview");
   assert.equal(operationTabForArea("announcer"), "track");
   assert.equal(operationTabForArea("operational"), "track");
   assert.equal(operationTabForArea("admin"), null);
   assert.equal(operationTabForLocation("/", "office"), null);
   assert.equal(operationTabForLocation("/", "announcer"), null);
-  assert.equal(operationTabForLocation("/operacao", "office"), "entries");
+  assert.equal(operationTabForLocation("/operacao", "office"), "overview");
   assert.equal(operationTabForLocation("/operacao", "announcer"), "track");
   assert.equal(operationTabForLocation("/operacao/pista", "office"), "track");
   assert.equal(operationPathForTab("overview"), "/operacao");

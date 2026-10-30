@@ -1,4 +1,4 @@
-# Preparação do coordenador para Render
+﻿# Preparação do coordenador para Render
 
 ## Estrutura e diretório
 
@@ -26,6 +26,6 @@ O modo proxy usa HTTP apenas no trecho interno entre Render proxy e processo Nod
 
 ## Limites e revisão antes de publicar
 
-Esta configuração prepara o processo para rodar em Render, mas não publica nada. Um Web Service público torna o coordenador acessível pela internet. O serviço ainda usa credenciais estáticas provisionadas manualmente, não valida sessão/claims do Supabase, não sincroniza SQLite com Supabase, não oferece proteção contra abuso baseada em IP e não tem revisão operacional de recuperação do volume. TLS e tokens individuais não substituem esses controles. Não trate o serviço como ponte Supabase nem como pronto para dados de um evento real apenas por iniciar no Render. Revise a exposição pública e o ciclo de emissão/rotação/revogação de credenciais antes de usar dados operacionais.
+Esta configuração prepara o processo para rodar em Render, mas não publica nada. Um Web Service público torna o coordenador acessível pela internet. O serviço ainda usa credenciais estáticas provisionadas manualmente, não valida sessão/claims do Neon Auth, não sincroniza SQLite com Neon, não oferece proteção contra abuso baseada em IP e não tem revisão operacional de recuperação do volume. TLS e tokens individuais não substituem esses controles. Não trate o serviço como ponte Neon nem como pronto para dados de um evento real apenas por iniciar no Render. Revise a exposição pública e o ciclo de emissão/rotação/revogação de credenciais antes de usar dados operacionais.
 
-Não execute migrações Supabase nem configure credenciais `service_role` neste serviço. Faça backup do SQLite e manifeste separadamente; volume persistente não substitui backup externo.
+Este serviço não aplica migrations SQL do Neon nem precisa de credenciais de banco. Faça backup do SQLite e manifeste separadamente; volume persistente não substitui backup externo.

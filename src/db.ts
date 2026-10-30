@@ -1,4 +1,4 @@
-﻿import { backendConfigured, currentSession, supabase } from "./backend";
+import { backendConfigured, currentSession, neonClient } from "./backend";
 import { currentParkOwnerId } from "./backend";
 import { AVAILABLE_CATEGORIES, AuditRecord, CallRecord, Category, CompetitionConfig, Entry, EntryTransferChanges, EventConfig, OfflineOperationKind, RunResult, TicketReservation, TrackAction, TrackState, applyTrackAction, cancelEntryRecord, compareOfflineOperations, createTrackState, getEntryStatus, getEventCategories, getPaymentStatus, getReservationStatus, hasTicketCapacity, isCategoryEnabled, isReservationActive, overlayQueuedRecord, transferEntryRecord, validateEventRevision } from "./domain";
 import { BackupPayload, parseBackup } from "./backup";
@@ -362,11 +362,11 @@ export async function getSyncStatus(): Promise<SyncStatus> {
 }
 async function applySyncOperation(operation: SyncOperation): Promise<void> {
   const payload = operation.payload;
-  if (!supabase) throw new Error("Backend ainda não configurado.");
+  if (!neonClient) throw new Error("Backend ainda não configurado.");
   if (operation.kind === "event.create") {
     const event = payload as unknown as EventConfig;
     const endDate = event.endsAt || event.date;
-    const { error } = await supabase.rpc("create_park_event", {
+    const { error } = await neonClient.rpc("create_park_event", {
       p_id: event.id, p_name: event.name, p_location: event.location,
       p_starts_at: `${event.date}T00:00:00.000Z`, p_ends_at: `${endDate}T23:59:59.999Z`,
       p_categories: event.categories || [], p_rules: event.rules || {}, p_category_rules: event.categorySettings || {},
@@ -375,7 +375,7 @@ async function applySyncOperation(operation: SyncOperation): Promise<void> {
     });
     if (!error) return;
     if (error.code === "23505") {
-      const { data, error: readError } = await supabase.from("events").select("id,name,starts_at,categories").eq("id", event.id).maybeSingle();
+      const { data, error: readError } = await neonClient.from("events").select("id,name,starts_at,categories").eq("id", event.id).maybeSingle();
       if (readError) throw readError;
       if (data && data.name === event.name && String(data.starts_at).slice(0, 10) === event.date && stableJson(data.categories) === stableJson(event.categories || [])) return;
     }
@@ -383,7 +383,7 @@ async function applySyncOperation(operation: SyncOperation): Promise<void> {
   }
   if (operation.kind === "entry.create") {
     const entry = payload as unknown as Entry;
-    const { error } = await supabase.from("entries").insert({
+    const { error } = await neonClient.from("entries").insert({
       id: entry.id, event_id: entry.eventId, number: entry.number, vaqueiro: entry.vaqueiro, partner_name: entry.partner || "",
       horse: entry.horse, representation: entry.representation, category: entry.category,
       paid: getPaymentStatus(entry) === "paid", payment_status: getPaymentStatus(entry),
@@ -392,7 +392,7 @@ async function applySyncOperation(operation: SyncOperation): Promise<void> {
     if (!error) return;
     if (error.message.includes("Ticket capacity reached")) throw new Error("A quantidade de senhas desta vaquejada foi atingida antes da sincronização.");
     if (error.code === "23505") {
-      const { data, error: readError } = await supabase.from("entries").select("id,event_id,number,vaqueiro,partner_name,horse,representation,category")
+      const { data, error: readError } = await neonClient.from("entries").select("id,event_id,number,vaqueiro,partner_name,horse,representation,category")
         .eq("id", entry.id).maybeSingle();
       if (readError) throw readError;
       if (data && data.event_id === entry.eventId && data.number === entry.number && data.vaqueiro === entry.vaqueiro && data.partner_name === (entry.partner || "") && data.category === entry.category) return;
@@ -403,10 +403,10 @@ async function applySyncOperation(operation: SyncOperation): Promise<void> {
   if (operation.kind === "entry.payment") {
     const entry = payload as unknown as Entry;
     const fields = { paid: getPaymentStatus(entry) === "paid", payment_status: getPaymentStatus(entry), paid_amount: entry.paidAmount || 0, payment_method: entry.paymentMethod || null };
-    const { data, error } = await supabase.from("entries").update(fields).eq("id", entry.id).select("id").maybeSingle();
+    const { data, error } = await neonClient.from("entries").update(fields).eq("id", entry.id).select("id").maybeSingle();
     if (error) throw error;
     if (data) return;
-    const { data: current, error: readError } = await supabase.rpc("get_entry_payment_state", { p_entry_id: entry.id });
+    const { data: current, error: readError } = await neonClient.rpc("get_entry_payment_state", { p_entry_id: entry.id });
     if (readError) throw readError;
     const payment = Array.isArray(current) ? current[0] : current;
     if (payment && payment.payment_status === fields.payment_status && Number(payment.paid_amount) === fields.paid_amount && payment.payment_method === fields.payment_method) return;
@@ -414,21 +414,21 @@ async function applySyncOperation(operation: SyncOperation): Promise<void> {
   }
   if (operation.kind === "entry.cancel") {
     const entry = payload as unknown as Entry;
-    const { data, error } = await supabase.from("entries").update({ status: "cancelled", status_reason: entry.statusReason, cancelled_at: entry.cancelledAt || null })
+    const { data, error } = await neonClient.from("entries").update({ status: "cancelled", status_reason: entry.statusReason, cancelled_at: entry.cancelledAt || null })
       .eq("id", entry.id).eq("event_id", entry.eventId).eq("status", "active").select("id").maybeSingle();
     if (error) {
       if (error.message.includes("recorded results cannot be cancelled")) throw new Error("Esta senha já tem resultados registrados e não pode ser cancelada.");
       throw error;
     }
     if (data) return;
-    const { data: current, error: readError } = await supabase.from("entries").select("status,status_reason").eq("id", entry.id).eq("event_id", entry.eventId).maybeSingle();
+    const { data: current, error: readError } = await neonClient.from("entries").select("status,status_reason").eq("id", entry.id).eq("event_id", entry.eventId).maybeSingle();
     if (readError) throw readError;
     if (current?.status === "cancelled" && current.status_reason === entry.statusReason) return;
     throw new Error("A inscrição mudou em outro dispositivo; atualize os dados antes de cancelar.");
   }
   if (operation.kind === "entry.transfer") {
     const entry = payload as unknown as Entry & { previous: EntryTransferChanges };
-    const { data, error } = await supabase.from("entries").update({
+    const { data, error } = await neonClient.from("entries").update({
       vaqueiro: entry.vaqueiro, partner_name: entry.partner || "", horse: entry.horse, representation: entry.representation, category: entry.category,
       transfer_reason: entry.transferReason, transferred_at: entry.transferredAt || null,
     }).eq("id", entry.id).eq("event_id", entry.eventId).eq("status", "active")
@@ -440,7 +440,7 @@ async function applySyncOperation(operation: SyncOperation): Promise<void> {
       throw error;
     }
     if (data) return;
-    const { data: current, error: readError } = await supabase.from("entries")
+    const { data: current, error: readError } = await neonClient.from("entries")
       .select("status,vaqueiro,partner_name,horse,representation,category,transfer_reason")
       .eq("id", entry.id).eq("event_id", entry.eventId).maybeSingle();
     if (readError) throw readError;
@@ -450,14 +450,14 @@ async function applySyncOperation(operation: SyncOperation): Promise<void> {
   }
   if (operation.kind === "result.create") {
     const result = payload as unknown as RunResult;
-    const { error } = await supabase.from("run_results").insert({
+    const { error } = await neonClient.from("run_results").insert({
       id: result.id, event_id: result.eventId, entry_id: result.entryId, rodizio: result.rodizio,
       bull_number: result.bullNumber, result_type: result.resultType, points: result.points,
       status: result.status, created_at: result.createdAt,
     });
     if (!error) return;
     if (error.code === "23505") {
-      const { data, error: readError } = await supabase.from("run_results").select("event_id,entry_id,rodizio,bull_number,result_type,points,status").eq("id", result.id).maybeSingle();
+      const { data, error: readError } = await neonClient.from("run_results").select("event_id,entry_id,rodizio,bull_number,result_type,points,status").eq("id", result.id).maybeSingle();
       if (readError) throw readError;
       if (data && data.event_id === result.eventId && data.entry_id === result.entryId && data.rodizio === result.rodizio && data.bull_number === result.bullNumber && data.result_type === result.resultType && Number(data.points) === result.points && data.status === result.status) return;
     }
@@ -465,11 +465,11 @@ async function applySyncOperation(operation: SyncOperation): Promise<void> {
   }
   if (operation.kind === "result.confirm") {
     const result = payload as unknown as RunResult;
-    const { data, error } = await supabase.from("run_results").update({ status: "official" })
+    const { data, error } = await neonClient.from("run_results").update({ status: "official" })
       .eq("id", result.id).eq("event_id", result.eventId).eq("status", "pending").select("id").maybeSingle();
     if (error) throw error;
     if (data) return;
-    const { data: current, error: readError } = await supabase.from("run_results").select("status").eq("id", result.id).eq("event_id", result.eventId).maybeSingle();
+    const { data: current, error: readError } = await neonClient.from("run_results").select("status").eq("id", result.id).eq("event_id", result.eventId).maybeSingle();
     if (readError) throw readError;
     if (current?.status === "official") return;
     throw new Error("O resultado mudou antes da sincronização; revise o histórico.");
@@ -487,7 +487,7 @@ async function deleteOutboxOperation(id: string): Promise<void> {
 export function syncPendingOperations(): Promise<SyncStatus> {
   if (syncInFlight) return syncInFlight;
   syncInFlight = (async () => {
-    if (!backendConfigured || !navigator.onLine || !supabase) return getSyncStatus();
+    if (!backendConfigured || !navigator.onLine || !neonClient) return getSyncStatus();
     const session = await currentSession().catch(() => null);
     if (!session) return getSyncStatus();
     const operations = (await all<SyncOperation>("outbox"))
@@ -521,7 +521,7 @@ export async function getEvents(): Promise<EventConfig[]> {
     const owner = await currentParkOwnerId();
     if (!navigator.onLine) return fallbackRows<EventConfig>(owner, "events", new Error("offline"));
     try {
-      const { data: rows, error } = await supabase!.from("events").select("id,name,location,starts_at,ends_at,categories,rules,category_rules,ticket_quantity,ticket_price,prizes,scoring_mode,created_at").order("starts_at", { ascending: true });
+      const { data: rows, error } = await neonClient!.from("events").select("id,name,location,starts_at,ends_at,categories,rules,category_rules,ticket_quantity,ticket_price,prizes,scoring_mode,created_at").order("starts_at", { ascending: true });
       if (error) throw error;
       const events = ((rows || []) as unknown as Array<Record<string, unknown>>).map((row) => ({
         id: String(row.id), name: String(row.name), location: String(row.location || ""),
@@ -545,7 +545,7 @@ export async function getEntries(): Promise<Entry[]> {
     const owner = await currentParkOwnerId();
     if (!navigator.onLine) return fallbackRows<Entry>(owner, "entries", new Error("offline"));
     try {
-      const { data: rows, error } = await supabase!.rpc("get_event_entries");
+      const { data: rows, error } = await neonClient!.rpc("get_event_entries");
       if (error) throw error;
       const entries = ((rows || []) as unknown as Array<Record<string, unknown>>).map((row) => ({
         id: String(row.id), eventId: String(row.event_id), number: Number(row.number),
@@ -577,10 +577,10 @@ export async function getTicketReservations(eventId?: string): Promise<TicketRes
     }
     try {
       if (eventId) {
-        const { error: sweepError } = await supabase!.rpc("sweep_event_ticket_reservations", { p_event_id: eventId });
+        const { error: sweepError } = await neonClient!.rpc("sweep_event_ticket_reservations", { p_event_id: eventId });
         if (sweepError) throw sweepError;
       }
-      let query = supabase!.from("ticket_reservations")
+      let query = neonClient!.from("ticket_reservations")
         .select("id,event_id,number,reserved_for,expires_at,status,reason,created_by,created_at,released_at,released_by,release_reason")
         .order("created_at", { ascending: false });
       if (eventId) query = query.eq("event_id", eventId);
@@ -613,7 +613,7 @@ export async function reserveTicketNumber(input: {
   }
   if (backendConfigured) {
     if (!navigator.onLine) throw new Error("Criar uma reserva compartilhada exige conexão com o servidor do parque.");
-    const { error } = await supabase!.rpc("reserve_event_ticket_number", {
+    const { error } = await neonClient!.rpc("reserve_event_ticket_number", {
       p_id: input.id, p_event_id: input.eventId, p_number: input.number, p_reserved_for: input.reservedFor.trim(),
       p_expires_at: input.expiresAt, p_reason: input.reason?.trim() || null,
     });
@@ -659,7 +659,7 @@ export async function releaseTicketReservation(reservation: TicketReservation, r
   if (reason.trim().length < 10) throw new Error("Informe um motivo com pelo menos 10 caracteres.");
   if (backendConfigured) {
     if (!navigator.onLine) throw new Error("Liberar uma reserva compartilhada exige conexão com o servidor do parque.");
-    const { error } = await supabase!.rpc("release_event_ticket_reservation", { p_id: reservation.id, p_reason: reason.trim() });
+    const { error } = await neonClient!.rpc("release_event_ticket_reservation", { p_id: reservation.id, p_reason: reason.trim() });
     if (error) throw error.message.includes("Only active reservations") ? new Error("A reserva já expirou ou foi finalizada.") : error;
     return;
   }
@@ -690,8 +690,8 @@ export async function getResults(): Promise<RunResult[]> {
     if (!navigator.onLine) return fallbackRows<RunResult>(owner, "results", new Error("offline"));
     try {
       const [resultsResponse, correctionsResponse] = await Promise.all([
-        supabase!.from("run_results").select("id,event_id,entry_id,rodizio,bull_number,result_type,points,status,created_at,created_by"),
-        supabase!.from("run_result_corrections").select("original_result_id,replacement_result_id,reason"),
+        neonClient!.from("run_results").select("id,event_id,entry_id,rodizio,bull_number,result_type,points,status,created_at,created_by"),
+        neonClient!.from("run_result_corrections").select("original_result_id,replacement_result_id,reason"),
       ]);
       if (resultsResponse.error) throw resultsResponse.error;
       if (correctionsResponse.error) throw correctionsResponse.error;
@@ -719,7 +719,7 @@ export async function getTrackState(eventId: string, config: CompetitionConfig):
   const local = localRows.find((item) => item.eventId === eventId);
   if (backendConfigured && navigator.onLine) {
     await syncTrackOperations();
-    const { data, error } = await supabase!.from("event_track_states").select("event_id,version,state,updated_at").eq("event_id", eventId).maybeSingle();
+    const { data, error } = await neonClient!.from("event_track_states").select("event_id,version,state,updated_at").eq("event_id", eventId).maybeSingle();
     if (error) {
       if (!local) throw error;
       return { ...local, syncState: local.syncState === "blocked" || local.syncState === "conflict" ? local.syncState : "pending" };
@@ -811,7 +811,7 @@ export async function getAuditRecords(): Promise<AuditRecord[]> {
   const owner = await currentParkOwnerId();
   if (!navigator.onLine) return fallbackRows<AuditRecord>(owner, "audit", new Error("offline"));
   try {
-    const { data: rows, error } = await supabase!.from("audit_log")
+    const { data: rows, error } = await neonClient!.from("audit_log")
       .select("id,event_id,record_table,record_id,action,actor_user_id,before_data,after_data,occurred_at")
       .order("occurred_at", { ascending: false }).limit(250);
     if (error) throw error;
@@ -968,7 +968,7 @@ export async function updateEvent(event: EventConfig): Promise<void> {
   const categories = event.categories || [];
   if (backendConfigured) {
     if (!navigator.onLine) throw new Error("A edição das configurações da vaquejada exige conexão.");
-    const { data, error } = await supabase!.from("events").update({
+    const { data, error } = await neonClient!.from("events").update({
       name: event.name, location: event.location,
       starts_at: `${event.date}T00:00:00.000Z`, ends_at: `${event.endsAt || event.date}T23:59:59.999Z`,
       categories, rules: event.rules || {}, category_rules: event.categorySettings || {},
@@ -1017,7 +1017,7 @@ export async function saveEntry(entry: Entry, reservationId?: string): Promise<v
   if (backendConfigured) {
     if (reservationId) {
       if (!navigator.onLine) throw new Error("Converter uma reserva compartilhada em inscrição exige conexão com o parque.");
-      const { error } = await supabase!.rpc("create_entry_from_ticket_reservation", {
+      const { error } = await neonClient!.rpc("create_entry_from_ticket_reservation", {
         p_entry_id: entry.id, p_reservation_id: reservationId, p_vaqueiro: entry.vaqueiro, p_partner_name: entry.partner || "",
         p_horse: entry.horse, p_representation: entry.representation, p_category: entry.category,
         p_payment_status: getPaymentStatus(entry), p_paid_amount: entry.paidAmount || 0,
@@ -1271,7 +1271,7 @@ export async function correctRunResult(input: {
   }
   if (backendConfigured) {
     if (!navigator.onLine) throw new Error("A correção de um resultado oficial exige conexão. Os resultados existentes continuam disponíveis no cache local.");
-    const { error } = await supabase!.rpc("correct_official_result", {
+    const { error } = await neonClient!.rpc("correct_official_result", {
       p_original_result_id: input.originalResultId, p_rodizio: input.rodizio,
       p_bull_number: input.bullNumber, p_result_type: input.resultType,
       p_points: input.points, p_reason: input.reason.trim(),

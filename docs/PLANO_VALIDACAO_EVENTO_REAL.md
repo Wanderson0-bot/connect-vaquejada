@@ -1,12 +1,15 @@
 # Plano de validação antes de uma vaquejada real
 
+> O checklist abaixo e uma etapa de homologacao, nao autoriza producao. O item de banco foi atualizado para Neon; siga [MIGRACAO_NEON.md](./MIGRACAO_NEON.md) e use apenas o branch TESTE ate concluir a validacao.
+
+
 Este documento define o bloqueio de liberação. Nenhuma etapa deve ser marcada como aprovada apenas porque o build compila.
 
 ## Bloqueadores obrigatórios
 
-- [ ] Aplicar migrações em projeto Supabase de homologação e verificar grants/RLS em todas as tabelas expostas.
-- [ ] Testar duas contas de parques diferentes: leitura, inclusão, atualização e tentativa de acesso cruzado devem respeitar isolamento.
-- [ ] Implementar e testar contas individuais, funções e permissões para Escritório, Locução, Julgador e Pista.
+- [ ] Aplicar as migrations Connect no branch Neon TESTE, confirmar Data API/Neon Auth e verificar grants/RLS em todas as tabelas expostas. Siga [MIGRACAO_NEON.md](./MIGRACAO_NEON.md); nao aplique migrations Supabase.
+- [ ] Validar duas contas e parques diferentes no Neon TESTE: leitura, inclusao, atualizacao e tentativas de acesso cruzado devem respeitar RLS/RBAC do PostgreSQL.
+- [ ] Validar no Neon TESTE contas individuais e permissoes para Escritorio, Locucao, Julgador e Pista, incluindo revogacao e acesso cruzado.
 - [ ] Definir por escrito o regulamento esportivo usado pelo evento: categorias, pontos, tentativas, rodízios, ocorrências, desempates, classificação, finais e correções.
 - [ ] Testar Pista com senha atual/próxima, tentativas inválidas, repetição de mensagens, fechamento/reabertura e trilha de auditoria.
 - [ ] Testar 3 ou mais aparelhos no mesmo Wi-Fi, com internet externa disponível, retirada do cabo/WAN, reinício do coordenador e reconexão.

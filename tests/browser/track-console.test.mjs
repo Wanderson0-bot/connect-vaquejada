@@ -187,7 +187,7 @@ test("Edge production UI: public home and anonymous protected-route denial", { t
     `export default { ...baseConfig, root: ${JSON.stringify(projectRoot)}, envDir: ${JSON.stringify(isolatedEnvDir)}, build: { ...baseConfig.build, outDir: ${JSON.stringify(isolatedBuildDir)}, emptyOutDir: true } };`,
     "",
   ].join("\n"), "utf8");
-  const previewEnv = { ...process.env, VITE_SUPABASE_URL: "", VITE_SUPABASE_ANON_KEY: "" };
+  const previewEnv = { ...process.env, VITE_NEON_URL: "" };
   const build = spawn(process.execPath, [viteCli, "build", "--config", isolatedConfigPath, "--configLoader", "runner"], {
     cwd: projectRoot, env: previewEnv, windowsHide: true, stdio: ["ignore", "pipe", "pipe"],
   });
@@ -340,7 +340,7 @@ test("Edge production UI: public home and anonymous protected-route denial", { t
     assert.doesNotMatch(text, /Vis.o geral|Console operacional|rea interna|Pista e resultados/);
     const publicLinks = await page.evaluate("[...document.querySelectorAll('a')].map((item) => item.getAttribute('href'))");
     assert.equal(publicLinks.some((href) => href && (/^\/connect(?:\/|$)/.test(href) || /^\/operacao(?:\/|$)/.test(href))), false, "Public navigation must not reveal internal areas.");
-    t.diagnostic(`Browser: ${browserInfo.Browser}; local URL: ${baseUrl}; Supabase deliberately unset; anonymous session.`);
+    t.diagnostic(`Browser: ${browserInfo.Browser}; local URL: ${baseUrl}; Neon deliberately unset; anonymous session.`);
 
     for (const area of ["office", "announcer", "operational"]) {
       await navigate(`${baseUrl}?area=${area}&event=private-test-id`);
@@ -372,13 +372,19 @@ test("Edge production UI: public home and anonymous protected-route denial", { t
     await waitFor("public event calendar", async () => (await bodyText(page)).includes("Eventos públicos"));
     await page.call("Page.reload");
     await waitFor("direct public calendar refresh", async () => (await bodyText(page)).includes("Todos os eventos"));
-    assert.match(await bodyText(page), /A consulta p.blica ainda n.o est. dispon.vel|Ainda n.o h. eventos publicados\./, "With Supabase unset, the site must show actual unavailability or an empty list, never invented events.");
+    assert.match(await bodyText(page), /A consulta p.blica ainda n.o est. dispon.vel|Ainda n.o h. eventos publicados\./, "With Neon unset, the site must show actual unavailability or an empty list, never invented events.");
 
-    for (const path of ["", "eventos", "eventos/invalid-id"]) {
+    for (const path of ["", "eventos", "eventos/invalid-id", "sobre", "contato"]) {
       const widthPaths = path ? `${baseUrl}${path}` : baseUrl;
       await navigate(widthPaths);
-      const expected = path === "" ? "TRADIÇÃO NA PISTA." : path === "eventos" ? "Eventos públicos" : "Evento público";
+      const expected = path === "" ? "TRADIÇÃO NA PISTA." : path === "eventos" ? "Eventos públicos" : path === "sobre" ? "Sobre o Connect" : path === "contato" ? "Fale com a gente" : "Evento público";
       await waitFor(`public page ${path || "/"}`, async () => (await bodyText(page)).includes(expected));
+      assert.ok((await bodyText(page)).includes("Termos de Uso"), `Public footer must appear on ${path || "/"}.`);
+      if (!path) {
+        const footerRoutes = await page.evaluate("({ explore: [...document.querySelectorAll('.public-footer-explore a')].map(a => a.getAttribute('href')), information: [...document.querySelectorAll('.public-footer-information a')].map(a => a.getAttribute('href')), legalTextOnly: [...document.querySelectorAll('.public-footer-information li span')].length })");
+        assert.deepEqual(footerRoutes, { explore: ["/", "/eventos", "/sobre"], information: ["/contato"], legalTextOnly: 2 });
+        assert.ok((await bodyText(page)).includes(String(new Date().getFullYear())), "Footer copyright year must be current.");
+      }
       for (const width of [360, 390, 768, 1024, 1366]) {
         await page.call("Emulation.setDeviceMetricsOverride", { width, height: 900, deviceScaleFactor: 1, mobile: width < 650 });
         const layout = await page.evaluate("({ viewport: innerWidth, document: document.documentElement.scrollWidth, body: document.body.scrollWidth, title: document.querySelector('h1')?.getBoundingClientRect().toJSON() ?? null, search: document.querySelector('input[type=search]')?.getBoundingClientRect().toJSON() ?? null })");
@@ -390,17 +396,19 @@ test("Edge production UI: public home and anonymous protected-route denial", { t
       if (!path) {
         await page.call("Emulation.setDeviceMetricsOverride", { width: 360, height: 900, deviceScaleFactor: 1, mobile: true });
         await clickButton(page, "Abrir menu");
-        assert.match(await bodyText(page), /Eventos[\s\S]*Sobre[\s\S]*Entrar/);
+        const mobileNavigation = await bodyText(page);
+        assert.match(mobileNavigation, /Vaquejadas[\s\S]*Sobre[\s\S]*Contato/);
+        assert.doesNotMatch(mobileNavigation, /Entrar/);
         const expanded = await page.evaluate("document.querySelector('.public-menu-toggle')?.getAttribute('aria-expanded')");
         assert.equal(expanded, "true", "Mobile public navigation must expose its expanded state.");
       }
     }
 
     await navigate(`${baseUrl}eventos/invalid-id`);
-    await waitFor("public event unavailable without Supabase", async () => /A consulta p.blica ainda n.o est. dispon.vel/.test(await bodyText(page)));
+    await waitFor("public event unavailable without Neon", async () => /A consulta p.blica ainda n.o est. dispon.vel/.test(await bodyText(page)));
     assert.deepEqual(consoleErrors, [], `Unexpected browser console errors: ${JSON.stringify(consoleErrors)}; browser: ${browserLog}`);
     assert.deepEqual(requestFailures, [], `Unexpected failed requests: ${JSON.stringify(requestFailures)}; Vite: ${previewLog}`);
-    t.diagnostic("Public root, event list and event detail verified at 360/390/768/1024/1366px; mobile menu opened; 16 internal routes blocked anonymously; area/event shortcuts grant no access; public data reports actual unavailability; consoleErrors=0; requestFailures=0.");
+    t.diagnostic("Public home, events, about, contact and event detail verified at 360/390/768/1024/1366px; footer routes and current year verified; mobile menu opened; 16 internal routes blocked anonymously; area/event shortcuts grant no access; public data reports actual unavailability; consoleErrors=0; requestFailures=0.");
   } catch (error) {
     let renderedPage = "<page unavailable>";
     try { renderedPage = await bodyText(page); } catch { /* Preserve the first failure. */ }

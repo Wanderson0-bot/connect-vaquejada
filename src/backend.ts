@@ -1,15 +1,31 @@
-﻿import { createClient, Session } from "@supabase/supabase-js";
+import { BetterAuthVanillaAdapter, createClient, defaultDeriveNeonUrls, SupabaseAuthAdapter } from "@neondatabase/neon-js";
+import { createAuthClient } from "@neondatabase/neon-js/auth";
 
-const url = import.meta.env.VITE_SUPABASE_URL?.replace(/\/$/, "");
-const anonKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
-export const backendConfigured = Boolean(url && anonKey);
-export const supabase = backendConfigured
-  ? createClient(url!, anonKey!, {
-      auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true },
+const url = import.meta.env.VITE_NEON_URL?.replace(/\/$/, "");
+const derivedUrls = url ? defaultDeriveNeonUrls(url) : null;
+const authUrl = import.meta.env.VITE_NEON_AUTH_BASE_URL?.replace(/\/$/, "") || derivedUrls?.auth || null;
+const dataApiUrl = import.meta.env.VITE_NEON_DATA_API_URL?.replace(/\/$/, "") || derivedUrls?.dataApi || null;
+const eventAccessApiUrl = import.meta.env.VITE_BACKEND_API_URL?.trim().replace(/\/+$/, "") || null;
+export const authProjectRef = (() => {
+  try { return new URL(authUrl || url || "").hostname.split(".")[0] || "desconhecido"; }
+  catch { return "desconhecido"; }
+})();
+export const backendConfigured = Boolean(authUrl && dataApiUrl);
+export const neonClient = authUrl && dataApiUrl
+  ? createClient({
+      auth: { url: authUrl, adapter: SupabaseAuthAdapter(), allowAnonymous: true },
+      dataApi: { url: dataApiUrl },
     })
   : null;
+const neonAuth = authUrl
+  ? createAuthClient(authUrl, { adapter: BetterAuthVanillaAdapter() })
+  : null;
 
-export type AuthSession = Session;
+export type AuthSession = {
+  access_token: string;
+  user: { id: string; email?: string };
+};
+const syncedNeonUsers = new Set<string>();
 export type ParkProfile = {
   id: string; owner_user_id: string | null; name: string; manager_name: string;
   phone: string; city: string; state: string; address: string;
@@ -86,7 +102,7 @@ function isMissingRpc(error: { code?: string } | null): boolean {
 }
 function throwMissingMigration(error: { code?: string } | null, functionName: string, migrationFile: string): void {
   if (isMissingRpc(error)) {
-    throw new Error(`A função ${functionName} ainda não existe no Supabase. Aplique a migration ${migrationFile} e tente novamente.`);
+    throw new Error(`A função ${functionName} ainda não existe no Neon. Aplique a migration ${migrationFile} e tente novamente.`);
   }
 }
 export function clearOfflineParkCache(): void {
@@ -96,10 +112,16 @@ export function clearOfflineParkCache(): void {
 }
 
 export async function currentSession(): Promise<AuthSession | null> {
-  if (!supabase) return null;
-  const { data, error } = await supabase.auth.getSession();
+  if (!neonClient) return null;
+  const { data, error } = await neonClient.auth.getSession();
   if (error) throw error;
-  return data.session;
+  const session = data.session;
+  if (session && !syncedNeonUsers.has(session.user.id)) {
+    const { error: syncError } = await neonClient.rpc("sync_current_app_user");
+    if (syncError) throw syncError;
+    syncedNeonUsers.add(session.user.id);
+  }
+  return session;
 }
 export async function requirePlatformRole(required: PlatformContext["role"][]): Promise<PlatformContext> {
   const session = await currentSession();
@@ -111,58 +133,99 @@ export async function requirePlatformRole(required: PlatformContext["role"][]): 
   return context;
 }
 export async function signIn(email: string, password: string): Promise<AuthSession> {
-  if (!supabase) throw new Error("Autenticação ainda não configurada.");
-  const { data, error } = await supabase.auth.signInWithPassword({ email, password });
+  if (!neonClient) throw new Error("Autenticação ainda não configurada.");
+  const { data, error } = await neonClient.auth.signInWithPassword({ email, password });
   if (error) throw error;
   if (!data.session) throw new Error("A autenticação não retornou uma sessão ativa.");
   return data.session;
 }
 export async function signInEventRole(accessCode: string, pin: string): Promise<AuthSession> {
-  if (!supabase) throw new Error("Autenticação ainda não configurada.");
-  const { data, error } = await supabase.functions.invoke("event-access", {
-    body: { action: "login", accessCode: accessCode.trim().toUpperCase(), pin: pin.trim() },
-  });
-  if (error) throw error;
-  const sessionData = data?.session as { access_token?: string; refresh_token?: string } | undefined;
-  if (!sessionData?.access_token || !sessionData.refresh_token) {
-    throw new Error("O serviço de acesso operacional não retornou uma sessão válida.");
+  if (!neonClient) throw new Error("Autenticação ainda não configurada.");
+  const credentials = await requestEventAccess("login", {
+    accessCode: accessCode.trim().toUpperCase(),
+    pin: pin.trim(),
+  }) as { email?: string; password?: string };
+  if (!credentials.email || !credentials.password) {
+    throw new Error("O serviço de acesso operacional não retornou credenciais válidas.");
   }
-  const { data: authenticated, error: sessionError } = await supabase.auth.setSession({
-    access_token: sessionData.access_token,
-    refresh_token: sessionData.refresh_token,
+  return signIn(credentials.email, credentials.password);
+}
+
+async function requestEventAccess(action: "login" | "provision", payload: Record<string, unknown>) {
+  const session = await currentSession();
+  if (!eventAccessApiUrl) {
+    throw new Error("API operacional não configurada. Defina VITE_BACKEND_API_URL com a URL pública do backend no Render.");
+  }
+  const response = await fetch(`${eventAccessApiUrl}/api/event-access`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      ...(session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {}),
+    },
+    body: JSON.stringify({ action, ...payload }),
   });
-  if (sessionError) throw sessionError;
-  if (!authenticated.session) throw new Error("A autenticação operacional não retornou uma sessão ativa.");
-  return authenticated.session;
+  const data = await response.json().catch(() => null);
+  if (!response.ok) {
+    throw new Error(typeof data?.error === "string" ? data.error : "Não foi possível validar o acesso operacional.");
+  }
+  return data as Record<string, unknown>;
 }
 export async function signUp(email: string, password: string) {
-  if (!supabase) throw new Error("Autenticação ainda não configurada.");
-  const { data, error } = await supabase.auth.signUp({ email, password });
+  if (!neonClient) throw new Error("Autenticação ainda não configurada.");
+  const nativeAuth = neonAuth as unknown as {
+    signUp: { email: (credentials: { email: string; password: string; name: string; callbackURL: string }) => Promise<{ error: { message?: string } | null }> };
+  };
+  const { error } = await nativeAuth.signUp.email({
+    email,
+    password,
+    name: email.split("@")[0] || "Connect",
+    callbackURL: `${window.location.origin}${window.location.pathname}`,
+  });
+  if (error) throw new Error(error.message || "Neon signup failed.");
+  const { data: sessionData, error: sessionError } = await neonClient.auth.getSession();
+  if (sessionError) throw sessionError;
+  return {
+    session: sessionData.session,
+    needsEmailConfirmation: !sessionData.session,
+    existingAccount: false,
+  };
+}
+export async function resendSignupConfirmation(email: string) {
+  if (!neonClient) throw new Error("Autenticação ainda não configurada.");
+  const { error } = await neonClient.auth.resend({
+    type: "signup",
+    email,
+    options: { emailRedirectTo: `${window.location.origin}${window.location.pathname}` },
+  });
   if (error) throw error;
-  return { session: data.session, needsEmailConfirmation: !data.session };
 }
 export async function signOut() {
-  if (!supabase) return;
-  const { error } = await supabase.auth.signOut({ scope: "local" });
+  if (!neonClient) return;
+  const { error } = await neonClient.auth.signOut();
   if (error) throw error;
+  syncedNeonUsers.clear();
 }
 export async function requestPasswordReset(email: string) {
-  if (!supabase) throw new Error("Autenticação ainda não configurada.");
-  const { error } = await supabase.auth.resetPasswordForEmail(email, { redirectTo: `${window.location.origin}/recuperar-senha?passwordRecovery=1` });
-  if (error) throw error;
+  if (!neonAuth) throw new Error("Autenticação Neon ainda não configurada.");
+  const { error } = await neonAuth.requestPasswordReset({
+    email,
+    redirectTo: `${window.location.origin}${window.location.pathname}`,
+  });
+  if (error) throw new Error(error.message || "Não foi possível enviar a redefinição de senha.");
 }
-export async function updatePassword(password: string) {
-  if (!supabase) throw new Error("Autenticação ainda não configurada.");
-  const { error } = await supabase.auth.updateUser({ password });
-  if (error) throw error;
+export async function updatePassword(password: string, token: string) {
+  if (!neonAuth) throw new Error("Autenticação Neon ainda não configurada.");
+  if (!token) throw new Error("O link de redefinição não contém um token válido. Solicite outro email.");
+  const { error } = await neonAuth.resetPassword({ newPassword: password, token });
+  if (error) throw new Error(error.message || "Não foi possível redefinir a senha.");
 }
 export async function getParkProfile(): Promise<ParkProfile | null> {
-  if (!supabase) return null;
+  if (!neonClient) return null;
   const session = await currentSession();
   if (!session) return null;
   if (!navigator.onLine) throw new Error("As permissões reais não podem ser revalidadas offline. Reconecte-se antes de abrir a área protegida.");
   const [{ data: parkRows, error: parkError }, { data: accessRows, error: accessError }] = await Promise.all([
-    supabase.rpc("get_my_park_context"), supabase.rpc("get_my_event_contexts"),
+    neonClient.rpc("get_my_park_context"), neonClient.rpc("get_my_event_contexts"),
   ]);
   if (parkError) throw parkError;
   if (accessError && !isMissingRpc(accessError)) throw accessError;
@@ -181,10 +244,10 @@ export async function getParkProfile(): Promise<ParkProfile | null> {
   return profile;
 }
 export async function getPlatformContext(): Promise<PlatformContext | null> {
-  if (!supabase) return null;
+  if (!neonClient) return null;
   const session = await currentSession();
   if (!session) return null;
-  const { data, error } = await supabase.rpc("get_my_platform_context");
+  const { data, error } = await neonClient.rpc("get_my_platform_context");
   if (error && isMissingRpc(error)) return null;
   if (error) throw error;
   const row = Array.isArray(data) ? data[0] : null;
@@ -199,9 +262,9 @@ export async function listConnectParks(filters: {
   limit: number;
   offset: number;
 }): Promise<ConnectParkListItem[]> {
-  if (!supabase) throw new Error("Backend ainda não configurado.");
+  if (!neonClient) throw new Error("Backend ainda não configurado.");
   await requirePlatformRole(["platform_admin", "deployment", "support"]);
-  const { data, error } = await supabase.rpc("list_connect_parks", {
+  const { data, error } = await neonClient.rpc("list_connect_parks", {
     p_search: filters.search.trim() || null,
     p_state: filters.state || null,
     p_city: filters.city.trim() || null,
@@ -216,9 +279,9 @@ export async function listConnectParks(filters: {
   return (data || []) as ConnectParkListItem[];
 }
 export async function getConnectParkProfile(parkId: string): Promise<ConnectParkProfile> {
-  if (!supabase) throw new Error("Backend ainda não configurado.");
+  if (!neonClient) throw new Error("Backend ainda não configurado.");
   await requirePlatformRole(["platform_admin", "deployment", "support"]);
-  const { data, error } = await supabase.rpc("get_connect_park_profile", { p_park_id: parkId });
+  const { data, error } = await neonClient.rpc("get_connect_park_profile", { p_park_id: parkId });
   if (error) {
     throwMissingMigration(error, "get_connect_park_profile", "202610240020_park_name_identity.sql");
     throw error;
@@ -226,7 +289,7 @@ export async function getConnectParkProfile(parkId: string): Promise<ConnectPark
   if (!data || typeof data !== "object" || !("park" in data) || !Array.isArray(data.members) || !Array.isArray(data.event_staff) || !Array.isArray(data.events)) {
     throw new Error("O servidor não retornou um perfil de parque válido.");
   }
-  const { data: code, error: codeError } = await supabase.rpc("get_connect_park_code", { p_park_id: parkId });
+  const { data: code, error: codeError } = await neonClient.rpc("get_connect_park_code", { p_park_id: parkId });
   if (codeError) {
     throwMissingMigration(codeError, "get_connect_park_code", "202610250022_connect_park_code.sql");
     throw codeError;
@@ -237,54 +300,54 @@ export async function getConnectParkProfile(parkId: string): Promise<ConnectPark
 }
 
 export async function getConnectPublicationQueue(): Promise<ConnectPublication[]> {
-  if (!supabase) throw new Error("Backend ainda não configurado.");
+  if (!neonClient) throw new Error("Backend ainda não configurado.");
   await requirePlatformRole(["platform_admin"]);
-  const { data, error } = await supabase.rpc("get_connect_publication_queue");
+  const { data, error } = await neonClient.rpc("get_connect_publication_queue");
   if (error) throw error;
   return (data || []) as ConnectPublication[];
 }
 
 export async function setConnectEventPublication(eventId: string, status: "approved" | "published" | "withdrawn" | "changes_requested", publicDescription: string, reason?: string): Promise<void> {
-  if (!supabase) throw new Error("Backend ainda não configurado.");
+  if (!neonClient) throw new Error("Backend ainda não configurado.");
   await requirePlatformRole(["platform_admin"]);
-  const { error } = await supabase.rpc("set_connect_event_publication", {
+  const { error } = await neonClient.rpc("set_connect_event_publication", {
     p_event_id: eventId, p_status: status, p_public_description: publicDescription, p_reason: reason || null,
   });
   if (error) throw error;
 }
 
 export async function confirmParkEventPublication(eventId: string, publicDescription: string, publicPrizes: string[]): Promise<void> {
-  if (!supabase) throw new Error("Backend ainda não configurado.");
-  const { error } = await supabase.rpc("confirm_park_event_publication", {
+  if (!neonClient) throw new Error("Backend ainda não configurado.");
+  const { error } = await neonClient.rpc("confirm_park_event_publication", {
     p_event_id: eventId, p_public_description: publicDescription.trim(), p_public_prizes: publicPrizes,
   });
   if (error) throw error;
 }
 
 export async function getMyEventPublicationStatuses(): Promise<ParkEventPublicationStatus[]> {
-  if (!supabase) return [];
-  const { data, error } = await supabase.rpc("get_my_event_publication_statuses");
+  if (!neonClient) return [];
+  const { data, error } = await neonClient.rpc("get_my_event_publication_statuses");
   if (error) throw error;
   return (data || []) as ParkEventPublicationStatus[];
 }
 
 export async function getPublicEvents(): Promise<PublicEvent[]> {
-  if (!supabase) throw new Error("A consulta pública ainda não está disponível.");
-  const { data, error } = await supabase.rpc("list_public_events");
+  if (!neonClient) throw new Error("A consulta pública ainda não está disponível.");
+  const { data, error } = await neonClient.rpc("list_public_events");
   if (error) throw error;
   return (data || []) as PublicEvent[];
 }
 export async function listConnectPlatformAudit(parkId: string): Promise<ConnectPlatformAudit[]> {
-  if (!supabase) throw new Error("Backend ainda não configurado.");
+  if (!neonClient) throw new Error("Backend ainda não configurado.");
   await requirePlatformRole(["platform_admin", "deployment", "support"]);
-  const { data, error } = await supabase.rpc("list_connect_platform_audit", { p_park_id: parkId, p_limit: 100 });
+  const { data, error } = await neonClient.rpc("list_connect_platform_audit", { p_park_id: parkId, p_limit: 100 });
   if (error) throw error;
   return (data || []) as ConnectPlatformAudit[];
 }
 export async function getConnectAdminDashboard(): Promise<ConnectAdminDashboard> {
-  if (!supabase) throw new Error("Backend ainda não configurado.");
+  if (!neonClient) throw new Error("Backend ainda não configurado.");
   await requirePlatformRole(["platform_admin", "deployment", "support"]);
-  const { data, error } = await supabase.rpc("get_connect_admin_dashboard");
+  const { data, error } = await neonClient.rpc("get_connect_admin_dashboard");
   if (error) {
     throwMissingMigration(error, "get_connect_admin_dashboard", "202610240020_park_name_identity.sql");
     throw error;
@@ -295,9 +358,9 @@ export async function getConnectAdminDashboard(): Promise<ConnectAdminDashboard>
   return data as ConnectAdminDashboard;
 }
 export async function provisionConnectPark(input: Omit<ConnectPark, "id" | "access_status"> & { existingParkId?: string | null }) {
-  if (!supabase) throw new Error("Backend ainda não configurado.");
+  if (!neonClient) throw new Error("Backend ainda não configurado.");
   await requirePlatformRole(["platform_admin", "deployment"]);
-  const { data, error } = await supabase.rpc("provision_connect_park_by_name", {
+  const { data, error } = await neonClient.rpc("provision_connect_park_by_name", {
     p_name: input.name, p_manager_name: input.manager_name,
     p_phone: input.phone, p_city: input.city, p_state: input.state, p_address: input.address,
     p_existing_park_id: input.existingParkId || null,
@@ -309,31 +372,31 @@ export async function provisionConnectPark(input: Omit<ConnectPark, "id" | "acce
   return (Array.isArray(data) ? data[0] : data) as { park_id: string; park_name: string; created: boolean };
 }
 export async function updateConnectPark(park: ConnectPark): Promise<void> {
-  if (!supabase) throw new Error("Backend ainda não configurado.");
+  if (!neonClient) throw new Error("Backend ainda não configurado.");
   await requirePlatformRole(["platform_admin", "deployment"]);
-  const { error } = await supabase.rpc("update_connect_park", {
+  const { error } = await neonClient.rpc("update_connect_park", {
     p_park_id: park.id, p_name: park.name, p_manager_name: park.manager_name, p_phone: park.phone,
     p_city: park.city, p_state: park.state, p_address: park.address,
   });
   if (error) throw error;
 }
 export async function setConnectParkStatus(parkId: string, status: ConnectPark["access_status"], reason: string): Promise<void> {
-  if (!supabase) throw new Error("Backend ainda não configurado.");
+  if (!neonClient) throw new Error("Backend ainda não configurado.");
   await requirePlatformRole(["platform_admin", "deployment"]);
-  const { error } = await supabase.rpc("set_connect_park_status", { p_park_id: parkId, p_status: status, p_reason: reason });
+  const { error } = await neonClient.rpc("set_connect_park_status", { p_park_id: parkId, p_status: status, p_reason: reason });
   if (error) throw error;
 }
 export async function createConnectParkManagerInvitation(parkId: string, email: string) {
-  if (!supabase) throw new Error("Backend ainda não configurado.");
+  if (!neonClient) throw new Error("Backend ainda não configurado.");
   await requirePlatformRole(["platform_admin", "deployment"]);
-  const { data, error } = await supabase.rpc("create_connect_park_manager_invitation", { p_park_id: parkId, p_email: email.trim().toLowerCase() });
+  const { data, error } = await neonClient.rpc("create_connect_park_manager_invitation", { p_park_id: parkId, p_email: email.trim().toLowerCase() });
   if (error) throw error;
   return (Array.isArray(data) ? data[0] : data) as { invitation_id: string; invitation_token: string; expires_at: string };
 }
 export async function createConnectParkEvent(input: { parkId: string; idempotencyId: string; name: string; location: string; startsAt: string; endsAt: string; categories: string[]; ticketQuantity: number | null; ticketPrice: number | null }): Promise<string> {
-  if (!supabase) throw new Error("Backend ainda não configurado.");
+  if (!neonClient) throw new Error("Backend ainda não configurado.");
   await requirePlatformRole(["platform_admin", "deployment"]);
-  const { data, error } = await supabase.rpc("create_connect_park_event", {
+  const { data, error } = await neonClient.rpc("create_connect_park_event", {
     p_park_id: input.parkId, p_id: input.idempotencyId, p_name: input.name, p_location: input.location,
     p_starts_at: input.startsAt, p_ends_at: input.endsAt, p_categories: input.categories,
     p_ticket_quantity: input.ticketQuantity, p_ticket_price: input.ticketPrice,
@@ -342,103 +405,100 @@ export async function createConnectParkEvent(input: { parkId: string; idempotenc
   return data as string;
 }
 export async function listConnectParkEvents(parkId: string): Promise<ConnectEvent[]> {
-  if (!supabase) throw new Error("Backend ainda não configurado.");
-  const { data, error } = await supabase.rpc("list_connect_park_events", { p_park_id: parkId });
+  if (!neonClient) throw new Error("Backend ainda não configurado.");
+  const { data, error } = await neonClient.rpc("list_connect_park_events", { p_park_id: parkId });
   if (error) throw error;
   return (data || []) as ConnectEvent[];
 }
 export async function setConnectEventStatus(eventId: string, status: ConnectEvent["operational_status"], reason: string): Promise<void> {
-  if (!supabase) throw new Error("Backend ainda não configurado.");
+  if (!neonClient) throw new Error("Backend ainda não configurado.");
   await requirePlatformRole(["platform_admin", "deployment"]);
-  const { error } = await supabase.rpc("set_connect_event_status", { p_event_id: eventId, p_status: status, p_reason: reason });
+  const { error } = await neonClient.rpc("set_connect_event_status", { p_event_id: eventId, p_status: status, p_reason: reason });
   if (error) throw error;
 }
 export async function createEventStaffInvitation(eventId: string, email: string, role: "office" | "announcer" | "judge" | "track_operator", expiresAt: string) {
-  if (!supabase) throw new Error("Backend ainda não configurado.");
-  const { data, error } = await supabase.rpc("create_event_staff_invitation", { p_event_id: eventId, p_email: email.trim().toLowerCase(), p_role: role, p_expires_at: expiresAt });
+  if (!neonClient) throw new Error("Backend ainda não configurado.");
+  const { data, error } = await neonClient.rpc("create_event_staff_invitation", { p_event_id: eventId, p_email: email.trim().toLowerCase(), p_role: role, p_expires_at: expiresAt });
   if (error) throw error;
   return (Array.isArray(data) ? data[0] : data) as { invitation_id: string; invitation_token: string; expires_at: string };
 }
 export async function createEventRoleAccess(eventId: string, role: EventRoleAccess["role"], expiresAt: string) {
-  if (!supabase) throw new Error("Backend ainda não configurado.");
+  if (!neonClient) throw new Error("Backend ainda não configurado.");
   await requirePlatformRole(["platform_admin", "deployment"]);
-  const { data, error } = await supabase.functions.invoke("event-access", {
-    body: { action: "provision", eventId, role, expiresAt },
-  });
-  if (error) throw error;
+  const data = await requestEventAccess("provision", { eventId, role, expiresAt });
   if (!data?.accessCode || !data?.pin || !data?.expiresAt) {
     throw new Error("O serviço não retornou as credenciais operacionais.");
   }
   return data as { accessCode: string; pin: string; expiresAt: string; role: EventRoleAccess["role"]; credentialId: string };
 }
 export async function listEventRoleAccess(eventId: string): Promise<EventRoleAccess[]> {
-  if (!supabase) throw new Error("Backend ainda não configurado.");
+  if (!neonClient) throw new Error("Backend ainda não configurado.");
   await requirePlatformRole(["platform_admin", "deployment"]);
-  const { data, error } = await supabase.rpc("list_event_role_access", { p_event_id: eventId });
+  const { data, error } = await neonClient.rpc("list_event_role_access", { p_event_id: eventId });
   if (error) throw error;
   return (data || []) as EventRoleAccess[];
 }
 export async function revokeEventRoleAccess(eventId: string, role: EventRoleAccess["role"]): Promise<void> {
-  if (!supabase) throw new Error("Backend ainda não configurado.");
+  if (!neonClient) throw new Error("Backend ainda não configurado.");
   await requirePlatformRole(["platform_admin", "deployment"]);
-  const { error } = await supabase.rpc("revoke_event_role_access", { p_event_id: eventId, p_role: role });
+  const { error } = await neonClient.rpc("revoke_event_role_access", { p_event_id: eventId, p_role: role });
   if (error) throw error;
 }
 export async function acceptEventStaffInvitation(token: string): Promise<void> {
-  if (!supabase) throw new Error("Backend ainda não configurado.");
-  const { error } = await supabase.rpc("accept_event_staff_invitation", { p_invitation_token: token });
+  if (!neonClient) throw new Error("Backend ainda não configurado.");
+  const { error } = await neonClient.rpc("accept_event_staff_invitation", { p_invitation_token: token });
   if (error) throw error;
 }
 export async function listEventStaff(eventId: string): Promise<EventStaff[]> {
-  if (!supabase) throw new Error("Backend ainda não configurado.");
-  const { data, error } = await supabase.rpc("list_event_staff", { p_event_id: eventId });
+  if (!neonClient) throw new Error("Backend ainda não configurado.");
+  const { data, error } = await neonClient.rpc("list_event_staff", { p_event_id: eventId });
   if (error) throw error;
   return (data || []) as EventStaff[];
 }
 export async function prepareLegacyStaffReconciliation(batchId: string, parkId: string): Promise<void> {
-  if (!supabase) throw new Error("Backend ainda não configurado.");
-  const { error } = await supabase.rpc("prepare_legacy_staff_reconciliation", { p_batch_id: batchId, p_park_id: parkId });
+  if (!neonClient) throw new Error("Backend ainda não configurado.");
+  const { error } = await neonClient.rpc("prepare_legacy_staff_reconciliation", { p_batch_id: batchId, p_park_id: parkId });
   if (error) throw error;
 }
 export async function getLegacyStaffReconciliation(batchId: string): Promise<LegacyStaffReconciliationItem[]> {
-  if (!supabase) throw new Error("Backend ainda não configurado.");
-  const { data, error } = await supabase.rpc("get_legacy_staff_reconciliation", { p_batch_id: batchId });
+  if (!neonClient) throw new Error("Backend ainda não configurado.");
+  const { data, error } = await neonClient.rpc("get_legacy_staff_reconciliation", { p_batch_id: batchId });
   if (error) throw error;
   return (data || []) as LegacyStaffReconciliationItem[];
 }
 export async function getLegacyStaffReconciliationAudit(batchId: string): Promise<LegacyStaffReconciliationAudit[]> {
-  if (!supabase) throw new Error("Backend ainda não configurado.");
-  const { data, error } = await supabase.rpc("get_legacy_staff_reconciliation_audit", { p_batch_id: batchId });
+  if (!neonClient) throw new Error("Backend ainda não configurado.");
+  const { data, error } = await neonClient.rpc("get_legacy_staff_reconciliation_audit", { p_batch_id: batchId });
   if (error) throw error;
   return (data || []) as LegacyStaffReconciliationAudit[];
 }
 export async function reviewLegacyStaffMapping(itemId: string, classification: "proven" | "ambiguous" | "no_destination", evidenceReference: string | null, reason: string): Promise<void> {
-  if (!supabase) throw new Error("Backend ainda não configurado.");
-  const { error } = await supabase.rpc("review_legacy_staff_mapping", {
+  if (!neonClient) throw new Error("Backend ainda não configurado.");
+  const { error } = await neonClient.rpc("review_legacy_staff_mapping", {
     p_item_id: itemId, p_classification: classification, p_evidence_reference: evidenceReference, p_reason: reason,
   });
   if (error) throw error;
 }
 export async function activateLegacyStaffMapping(itemId: string): Promise<void> {
-  if (!supabase) throw new Error("Backend ainda não configurado.");
-  const { error } = await supabase.rpc("activate_legacy_staff_mapping", { p_item_id: itemId });
+  if (!neonClient) throw new Error("Backend ainda não configurado.");
+  const { error } = await neonClient.rpc("activate_legacy_staff_mapping", { p_item_id: itemId });
   if (error) throw error;
 }
 export async function revokeEventStaff(eventId: string, userId: string): Promise<void> {
-  if (!supabase) throw new Error("Backend ainda não configurado.");
-  const { error } = await supabase.rpc("revoke_event_staff", { p_event_id: eventId, p_user_id: userId });
+  if (!neonClient) throw new Error("Backend ainda não configurado.");
+  const { error } = await neonClient.rpc("revoke_event_staff", { p_event_id: eventId, p_user_id: userId });
   if (error) throw error;
 }
 export async function manageConnectPlatformStaff(email: string, role: "deployment" | "support"): Promise<void> {
-  if (!supabase) throw new Error("Backend ainda não configurado.");
+  if (!neonClient) throw new Error("Backend ainda não configurado.");
   await requirePlatformRole(["platform_admin"]);
-  const { error } = await supabase.rpc("manage_connect_platform_staff", { p_email: email.trim().toLowerCase(), p_role: role });
+  const { error } = await neonClient.rpc("manage_connect_platform_staff", { p_email: email.trim().toLowerCase(), p_role: role });
   if (error) throw error;
 }
 export async function revokeConnectPlatformStaff(email: string): Promise<void> {
-  if (!supabase) throw new Error("Backend ainda não configurado.");
+  if (!neonClient) throw new Error("Backend ainda não configurado.");
   await requirePlatformRole(["platform_admin"]);
-  const { error } = await supabase.rpc("revoke_connect_platform_staff", { p_email: email.trim().toLowerCase() });
+  const { error } = await neonClient.rpc("revoke_connect_platform_staff", { p_email: email.trim().toLowerCase() });
   if (error) throw error;
 }
 export async function currentParkOwnerId(): Promise<string> {
@@ -447,8 +507,8 @@ export async function currentParkOwnerId(): Promise<string> {
   throw new Error("Entre novamente com a conta do parque para sincronizar os dados.");
 }
 export async function updateParkProfile(park: ParkProfile) {
-  if (!supabase) throw new Error("Backend ainda não configurado.");
-  const { error } = await supabase.from("parks").update({
+  if (!neonClient) throw new Error("Backend ainda não configurado.");
+  const { error } = await neonClient.from("parks").update({
     name: park.name, manager_name: park.manager_name, phone: park.phone,
     city: park.city, state: park.state, address: park.address,
     updated_at: new Date().toISOString(),
@@ -457,24 +517,24 @@ export async function updateParkProfile(park: ParkProfile) {
 }
 
 export async function createParkInvitation(email: string, role: ParkProfile["access_role"]) {
-  if (!supabase) throw new Error("Backend ainda não configurado.");
-  const { data, error } = await supabase.rpc("create_park_invitation", { p_email: email.trim().toLowerCase(), p_role: role });
+  if (!neonClient) throw new Error("Backend ainda não configurado.");
+  const { data, error } = await neonClient.rpc("create_park_invitation", { p_email: email.trim().toLowerCase(), p_role: role });
   if (error) throw error;
   return (Array.isArray(data) ? data[0] : data) as { invitation_id: string; invitation_token: string; expires_at: string };
 }
 export async function acceptParkInvitation(token: string) {
-  if (!supabase) throw new Error("Backend ainda não configurado.");
-  const { error } = await supabase.rpc("accept_park_invitation", { p_invitation_token: token });
+  if (!neonClient) throw new Error("Backend ainda não configurado.");
+  const { error } = await neonClient.rpc("accept_park_invitation", { p_invitation_token: token });
   if (error) throw error;
 }
 export async function listParkMembers() {
-  if (!supabase) throw new Error("Backend ainda não configurado.");
-  const { data, error } = await supabase.from("park_memberships").select("park_id,user_id,role,created_at,disabled_at").order("created_at");
+  if (!neonClient) throw new Error("Backend ainda não configurado.");
+  const { data, error } = await neonClient.from("park_memberships").select("park_id,user_id,role,created_at,disabled_at").order("created_at");
   if (error) throw error;
   return data || [];
 }
 export async function deactivateParkMember(userId: string) {
-  if (!supabase) throw new Error("Backend ainda não configurado.");
-  const { error } = await supabase.rpc("deactivate_park_member", { p_user_id: userId });
+  if (!neonClient) throw new Error("Backend ainda não configurado.");
+  const { error } = await neonClient.rpc("deactivate_park_member", { p_user_id: userId });
   if (error) throw error;
 }

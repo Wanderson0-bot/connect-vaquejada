@@ -1,4 +1,6 @@
-# Connect PDM — decisões e estado técnico
+﻿# Connect PDM — decisões e estado técnico
+
+> **Estado da migração (2026-10-28):** o runtime atual no código usa Neon Managed Better Auth e Neon Data API. A migração ainda não foi aplicada a um projeto real e nenhum dado foi copiado. As seções históricas abaixo descrevem a arquitetura Supabase anterior; não as use como configuração ou validação do runtime atual. Consulte [Migração para Neon](./MIGRACAO_NEON.md) para instruções e pendências atuais.
 
 ## Diagnóstico
 

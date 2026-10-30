@@ -1,8 +1,10 @@
 import { Fragment, lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
 import {
+  ArrowLeft,
   ClipboardList,
   House,
   Printer,
+  BarChart3,
   Download,
   Trophy,
   WifiOff,
@@ -99,8 +101,10 @@ const PublicSite = lazy(() => import("./PublicSite").then((module) => ({ default
 
 export default function App() {
   const { pathname } = window.location;
+  const isPasswordRecoveryCallback = window.location.hash.includes("type=recovery") || new URLSearchParams(window.location.search).has("passwordRecovery");
+  if (isPasswordRecoveryCallback) return <AccountGate>{() => <RouteNotFound />}</AccountGate>;
   if (pathname === "/entrar" || pathname === "/recuperar-senha") return <AccountGate>{() => <RouteNotFound />}</AccountGate>;
-  if (pathname === "/" || pathname === "/index.html" || pathname === "/eventos" || pathname.startsWith("/eventos/") || isPublicParkPath(pathname)) return <Suspense fallback={<div className="public-site-empty" role="status">Carregando pagina publica...</div>}><PublicSite /></Suspense>;
+  if (pathname === "/" || pathname === "/index.html" || pathname === "/sobre" || pathname === "/sobre/" || pathname === "/contato" || pathname === "/contato/" || pathname === "/eventos" || pathname.startsWith("/eventos/") || isPublicParkPath(pathname)) return <Suspense fallback={<div className="public-site-empty" role="status">Carregando pagina publica...</div>}><PublicSite /></Suspense>;
   if (isConnectPath(pathname) || isOperationPath(pathname)) return <AccountGate>{(account) => <Dashboard {...account} />}</AccountGate>;
   return <RouteNotFound />;
 }
@@ -133,6 +137,7 @@ function Dashboard({ park, onSignOut, onSavePark }: {
   const [entryStatusFilter, setEntryStatusFilter] = useState("");
   const [correctionResultId, setCorrectionResultId] = useState("");
   const [notice, setNotice] = useState("");
+  const [officeView, setOfficeView] = useState<"home" | "reports">("home");
   const [loading, setLoading] = useState(true);
   const [networkOnline, setNetworkOnline] = useState(() => navigator.onLine);
   const [coordinatorSettings, setCoordinatorSettings] = useState(() => getCoordinatorSettings() || { url: "", token: "" });
@@ -260,6 +265,18 @@ function Dashboard({ park, onSignOut, onSavePark }: {
       : currentRole === "announcer" ? ["overview", "track"]
       : currentRole === "judge" || currentRole === "track_operator" ? ["overview", "track"] : ["overview"]
     : ["overview", "entries", "track", "settings", "park", "audit", "backup", ...(!backendConfigured ? ["network" as const] : [])];
+  const officeExperience = isEventScoped && currentRole === "office";
+  const officeHome = officeExperience && tab === "overview" && officeView === "home";
+  const officeReportView = officeExperience && tab === "overview" && officeView === "reports";
+  const officeStatus = syncStatus.blocked > 0
+    ? `${syncStatus.blocked} OPERAÇÃO(ÕES) PARA REVISAR`
+    : syncStatus.pending > 0
+      ? `${syncStatus.pending} OPERAÇÃO(ÕES) PENDENTES`
+      : backendConfigured
+        ? networkOnline ? "SISTEMA DISPONÍVEL" : "SEM CONEXÃO"
+        : coordinatorSettings.url
+          ? coordinatorStatus.connected ? "COORDENADOR CONECTADO" : "COORDENADOR DESCONECTADO"
+          : "DADOS NESTE APARELHO";
   useEffect(() => {
     if (deepLinkApplied.current || loading || events.length === 0) return;
     deepLinkApplied.current = true;
@@ -315,6 +332,7 @@ function Dashboard({ park, onSignOut, onSavePark }: {
 
   function navigateTab(nextTab: Tab) {
     if (!allowedTabs.includes(nextTab)) return;
+    if (nextTab !== "overview") setOfficeView("home");
     setTab(nextTab);
     const nextUrl = operationUrlForTab(nextTab, window.location.href);
     if (nextUrl.pathname !== window.location.pathname || nextUrl.search !== window.location.search) {
@@ -639,8 +657,8 @@ function Dashboard({ park, onSignOut, onSavePark }: {
   }
 
   return (
-    <div className="app-shell">
-      <aside className="sidebar">
+    <div className={`app-shell${officeExperience ? " office-app-shell" : ""}${officeExperience && tab === "overview" ? " office-overview-shell" : ""}`}>
+      {!officeExperience && <aside className="sidebar">
         <div className="brand">
           <img className="brand-mark" src="/Simbolo-Principal-Connect-Vaquejada.png" alt="Connect Vaquejada" />
           <div>
@@ -716,11 +734,17 @@ function Dashboard({ park, onSignOut, onSavePark }: {
           <span className="dot"></span> {park ? park.city + " / " + park.state : "Dados salvos neste aparelho"}
           {park && <button className="icon-button" onClick={() => void onSignOut()} title="Sair da conta"><LogOut size={15}/></button>}
         </div>
-      </aside>
-      <main className="main">
-        <header className="topbar">
+      </aside>}
+      <main className={`main${officeExperience ? " office-main" : ""}`}>
+        {officeExperience && tab === "overview" && <header className="office-header">
+          <img src="/Simbolo-Principal-Connect-Vaquejada.png" alt="Connect Vaquejada" />
+          <div className="office-header-status"><span className={officeStatus.includes("DESCONECTADO") || officeStatus === "SEM CONEXÃO" || officeStatus.includes("REVISAR") ? "is-warning" : ""}><i aria-hidden="true" />{officeStatus}</span><strong>{park?.name || "Parque"}</strong><b>{event?.name || "Nenhum evento selecionado"}</b></div>
+          <button className="office-signout" type="button" onClick={() => void onSignOut()} title="Sair da conta" aria-label="Sair da conta"><LogOut size={18} /></button>
+        </header>}
+        {!officeHome && <header className="topbar">
           <PageHeading eyebrow="OPERAÇÃO DO PARQUE" title={tabLabels[tab]} description={tabDescriptions[tab]} />
           <div className="event-select">
+            {officeExperience && <button type="button" className="office-back-button" onClick={() => { setOfficeView("home"); navigateTab("overview"); }}><ArrowLeft size={16} /> Escritório</button>}
             <label htmlFor="activeEvent">Evento ativo</label>
             <select
               id="activeEvent"
@@ -738,7 +762,7 @@ function Dashboard({ park, onSignOut, onSavePark }: {
               Exportar relatório interno CSV
             </button>}
           </div>
-        </header>
+        </header>}
         {backendConfigured && !networkOnline && <div className="offline-warning" role="status">Sem conexão: mostrando dados previamente carregados. Eventos novos, inscrições, pagamentos e lançamentos/confirmações de resultados ficam numa fila local deste aparelho; edição de vaquejadas, correções oficiais e edição do perfil exigem conexão. A fila não compartilha dados com outros aparelhos.</div>}
         {!backendConfigured && getCoordinatorSettings() && <div className={coordinatorStatus.blocked || coordinatorStatus.lastError || (coordinatorStatus.checked && !coordinatorStatus.connected) ? "sync-warning" : "sync-status"} role="status">{coordinatorStatusMessage}<button className="text-button" onClick={() => void refresh()}>Atualizar</button></div>}
         {backendConfigured && networkOnline && (syncStatus.pending > 0 || syncStatus.blocked > 0) && <div className={syncStatus.blocked ? "sync-warning" : "sync-status"} role="status">
@@ -755,7 +779,28 @@ function Dashboard({ park, onSignOut, onSavePark }: {
           <div className="empty">Carregando dados locais…</div>
         ) : (
           <>
-            {tab === "overview" && (
+            {officeHome && <section className="office-launcher" aria-labelledby="office-launcher-title">
+              {!event ? <div className="office-empty-event"><h1 id="office-launcher-title">ESCRITÓRIO DO PARQUE</h1><p>Nenhum evento autorizado está disponível para esta conta.</p></div> : <>
+                <div className="office-launcher-heading"><span>CONNECT VAQUEJADA</span><h1 id="office-launcher-title">ESCRITÓRIO DO PARQUE</h1><i aria-hidden="true" /><p>{event.name}</p></div>
+                <div className="office-launcher-actions" aria-label="Ações do escritório">
+                  <button className="office-action office-action-entries" type="button" onClick={() => navigateTab("entries")}><ClipboardList size={34} aria-hidden="true"/><strong>INSCRIÇÕES</strong><span>Registrar, consultar e editar inscrições.</span></button>
+                  <button className="office-action office-action-ticket" type="button" onClick={() => { navigateTab("entries"); window.setTimeout(() => document.getElementById("office-entry-list")?.scrollIntoView({ behavior: "smooth", block: "start" }), 100); }}><Printer size={34} aria-hidden="true"/><strong>EMITIR SENHA</strong><span>Localizar uma inscrição e imprimir o comprovante.</span></button>
+                  <button className="office-action office-action-reports" type="button" onClick={() => setOfficeView("reports")}><BarChart3 size={34} aria-hidden="true"/><strong>RELATÓRIOS</strong><span>Consultar totais e situação das inscrições.</span></button>
+                </div>
+              </>}
+            </section>}
+            {officeReportView && <section className="office-report-view" aria-labelledby="office-report-title">
+              <div className="office-report-heading"><button className="office-back-button" type="button" onClick={() => setOfficeView("home")}><ArrowLeft size={16} /> Escritório</button><span>EVENTO SELECIONADO</span><h1 id="office-report-title">Relatório de inscrições</h1><p>{event?.name || "Nenhum evento selecionado"}</p></div>
+              {!event ? <EmptySelect /> : <div className="office-report-grid">
+                <Stat label="Total de inscrições" value={eventEntries.length} hint="Todas as inscrições deste evento" />
+                <Stat label="Ativas" value={eventEntries.filter((entry) => getEntryStatus(entry) === "active").length} hint="Inscrições em vigor" />
+                <Stat label="Canceladas" value={eventEntries.filter((entry) => getEntryStatus(entry) === "cancelled").length} hint="Inscrições canceladas" />
+                <Stat label="Pagas" value={eventEntries.filter((entry) => !entry.paymentRestricted && getPaymentStatus(entry) === "paid").length} hint="Pagamentos visíveis para esta conta" />
+                <Stat label="Pendentes" value={eventEntries.filter((entry) => !entry.paymentRestricted && getPaymentStatus(entry) === "pending").length} hint="Pagamentos visíveis para esta conta" />
+                <Stat label="Isentas" value={eventEntries.filter((entry) => !entry.paymentRestricted && getPaymentStatus(entry) === "exempt").length} hint="Pagamentos visíveis para esta conta" />
+              </div>}
+            </section>}
+            {tab === "overview" && !officeExperience && (
               <section className="content operational-content">
                 {!events.length ? (
                   <div className="welcome card">
@@ -958,7 +1003,7 @@ function Dashboard({ park, onSignOut, onSavePark }: {
                     {coordinatorConfigured && <button className="secondary" type="button" onClick={() => { clearCoordinatorSettings(); setCoordinatorConfigured(false); setCoordinatorSettings({ url: "", token: "" }); setCoordinatorHealth(null); setCoordinatorStatus({ pending: 0, blocked: 0, checked: false, connected: false }); setNotice("Credencial do coordenador removida deste aparelho."); }}>Remover credencial deste aparelho</button>}
                   </form>
                   {coordinatorHealth && <p className="form-note">Conectado ao servidor local.</p>}
-                  <p className="subtle">A fila fica salva neste aparelho até ser validada pelo coordenador; a credencial deve pertencer ao operador autenticado e fica no armazenamento local deste aparelho. O servidor rejeita token expirado/desativado e aplica permissões por operação. Configure HTTPS com certificado confiável. Este coordenador local não consulta alterações recentes de perfil do Supabase: revogação exige desativar/rotacionar a credencial também no servidor e reiniciá-lo.</p>
+                  <p className="subtle">A fila fica salva neste aparelho até ser validada pelo coordenador; a credencial deve pertencer ao operador autenticado e fica no armazenamento local deste aparelho. O servidor rejeita token expirado/desativado e aplica permissões por operação. Configure HTTPS com certificado confiável. Este coordenador local não consulta alterações recentes de perfil do backend: revogação exige desativar/rotacionar a credencial também no servidor e reiniciá-lo.</p>
                 </div>
                 {getCoordinatorSettings() && <CoordinatorQueueReview onUpdated={refresh} />}
               </section>
@@ -1106,7 +1151,7 @@ function Dashboard({ park, onSignOut, onSavePark }: {
                         {eventReservations.map((reservation) => <tr key={reservation.id}><td>{reservation.number}</td><td>{reservation.reservedFor}</td><td>{new Date(reservation.expiresAt).toLocaleString("pt-BR")}</td><td>{reservation.status === "active" ? "Ativa" : reservation.status === "expired" ? "Expirada" : reservation.status === "converted" ? "Convertida" : "Liberada"}</td><td>{isReservationActive(reservation) && <><button className="text-button" type="button" onClick={() => { setSelectedReservationId(reservation.id); window.scrollTo({ top: 0, behavior: "smooth" }); }}>Cadastrar inscrição</button> <button className="text-button" type="button" onClick={async () => { const reason = window.prompt("Motivo para liberar esta reserva (mínimo 10 caracteres):"); if (!reason) return; try { await releaseTicketReservation(reservation, reason); await refresh(); setNotice("Reserva liberada."); } catch (error) { setNotice(error instanceof Error ? error.message : "Não foi possível liberar a reserva."); } }}>Liberar</button></>}</td></tr>)}
                       </tbody></table></div>}
                     </div>
-                    <div className="card table-card">
+                    <div className="card table-card" id="office-entry-list">
                       <div className="table-title">
                         <h2>Senhas cadastradas</h2>
                         <span className="subtle">{visibleEntries.length} de {eventEntries.length} · {eventEntries.filter((row) => getPaymentStatus(row) === "paid").length} pagas · {eventEntries.filter((row) => getPaymentStatus(row) === "pending").length} pendentes</span>

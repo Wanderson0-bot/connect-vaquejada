@@ -1,4 +1,4 @@
-# Coordenador local Connect PDM
+﻿# Coordenador local Connect PDM
 
 ## Componente e requisitos
 
@@ -38,7 +38,7 @@ Backup e manifesto `.manifest.json` são arquivos separados. O manifesto registr
 
 Hash e manifesto detectam corrupção acidental, mas não são criptografia nem proteção contra um agente que possa alterar ambos. Restrinja acesso por ACL do Windows, proteja a mídia e mantenha cópias criptografadas/offline fora do host, com retenção definida e responsável designado. Não copie somente o arquivo principal do SQLite ativo pelo Explorer. O utilitário não agenda, cifra, envia, nem apaga/rota backups; diretório e cópia fora do host são responsabilidade operacional. Testes usam apenas bancos fictícios temporários e não comprovam restauração em outro aparelho. Não há ensaio operacional, cópia remota, agendamento ou alerta.
 
-Este backup cobre somente o SQLite do coordenador: registros/versões, operações, conflitos, tentativas registradas e migrações. Não contém IndexedDB/outboxes/cache de cada navegador, nem dados remotos Supabase/PostgreSQL/Auth. O backup JSON da seção “Backup e restauração” é outro fluxo e não inclui este banco SQLite.
+Este backup cobre somente o SQLite do coordenador: registros/versões, operações, conflitos, tentativas registradas e migrações. Não contém IndexedDB/outboxes/cache de cada navegador, nem dados remotos Neon/PostgreSQL/Auth. O backup JSON da seção “Backup e restauração” é outro fluxo e não inclui este banco SQLite.
 
 ## Limites verificados
 
@@ -46,7 +46,7 @@ A PWA mantem uma outbox IndexedDB por aparelho e reenvia operacoes quando conect
 
 O estado “conectado” na interface só aparece depois de uma consulta autenticada bem-sucedida ao coordenador; antes disso é mostrado “verificando”. Falhas de transporte indicam indisponibilidade/reconexão, credenciais recusadas são separadas, e itens pendentes ou bloqueados não são apresentados como confirmados.
 
-O coordenador nao sincroniza dados para Supabase quando a internet retorna. O modo Supabase segue seu fluxo remoto e nao foi conectado ao SQLite. CORS nao substitui autenticacao; o coordenador local tem autenticacao individual estaticamente configurada, sem introspeccao online do Supabase Auth.
+O coordenador nao sincroniza dados para Neon quando a internet retorna. O modo conectado Neon segue seu fluxo remoto e nao foi conectado ao SQLite. CORS nao substitui autenticacao; o coordenador local tem autenticacao individual estaticamente configurada, sem introspeccao online do Neon Auth.
 
 Os testes automatizados usam o processo Node real, HTTP e SQLite temporário, cobrindo UTF-8, retomada após reinicialização, repetição após resposta perdida, recusa e auditoria de reuso adulterado de ID, disputa concorrente de versão entre duas identidades/dispositivos, rollback de conversão inválida, conflito recuperável, restauração de cópia isolada, e imutabilidade/confirmação/correção de resultado. Esses testes não simulam navegador/IndexedDB real. Ainda não houve ensaio com aparelhos físicos, Wi-Fi sem internet externa, certificados instalados nos dispositivos, hardware de pista ou carga de um evento real. Portanto esta etapa está parcialmente implementada e o sistema não está liberado para evento real.
 
@@ -60,8 +60,8 @@ O coordenador agora recusa iniciar em `0.0.0.0` ou em um endereço de rede sem T
 
 A autenticacao do coordenador usa a lista de operadores configurada no processo. Cada token se vincula a um UUID de usuario, papel, expiracao e estado ativo; a identidade do operador e gravada em cada operacao idempotente. `/api/operations` autoriza por entidade/acao. Leitura de snapshot/alteracoes filtra entidades e campos financeiros por papel; conflitos sao restritos ao responsavel do parque. Token ausente, expirado ou desativado recebe HTTP 401. Operador e perfil sao configuracao de servidor, nao dados aceitos do navegador.
 
-Para emitir, rotacionar ou revogar token, atualize `CONNECT_PDM_OPERATOR_CREDENTIALS` no host e reinicie o processo. Isso ainda nao consulta Supabase Auth nem percebe automaticamente alteracao de membership; portanto credenciais precisam ser provisionadas e revogadas em ambos os mecanismos ate existir validacao online de JWT/claims com consulta remota. Nunca compartilhe token entre operadores. A credencial guardada em localStorage permite que outra pessoa com acesso ao aparelho a reutilize; use contas do sistema operacional, bloqueio de tela, HTTPS e sessao individual.
+Para emitir, rotacionar ou revogar token, atualize `CONNECT_PDM_OPERATOR_CREDENTIALS` no host e reinicie o processo. Isso ainda nao consulta Neon Auth nem percebe automaticamente alteracao de membership; portanto credenciais precisam ser provisionadas e revogadas no coordenador e na aplicacao conectada ate existir validacao online de JWT/claims com consulta remota. Nunca compartilhe token entre operadores. A credencial guardada em localStorage permite que outra pessoa com acesso ao aparelho a reutilize; use contas do sistema operacional, bloqueio de tela, HTTPS e sessao individual.
 
 Papel aplicado pelo coordenador (sem permissao implicita global): park_manager administra operacoes do proprio coordenador; office administra cadastros/pagamento; announcer somente leitura operacional; judge registra julgamento/decisao; track_operator opera fila/rodizio. Resultado corretivo e encerramento/reabertura sao reservados ao responsavel. A instancia SQLite representa um unico parque; registros vinculados a outro parque/evento sao rejeitados/filtrados.
 
-O modo local sem Supabase nao comprova identidade do operador dentro do PWA: token individual so autoriza o servidor quando sincroniza. Operacoes locais/outbox continuam nao confirmadas ate validacao e podem ser colocadas em conflito/rejeitadas. O coordenador nao substitui politicas RLS do Supabase nem sincroniza os dois bancos.
+O modo local sem Neon Auth nao comprova identidade do operador dentro do PWA: token individual so autoriza o servidor quando sincroniza. Operacoes locais/outbox continuam nao confirmadas ate validacao e podem ser colocadas em conflito/rejeitadas. O coordenador nao substitui politicas RLS do Neon nem sincroniza os dois bancos.

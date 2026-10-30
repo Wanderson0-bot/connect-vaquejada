@@ -1,5 +1,8 @@
 ﻿# Plano de homologaÃ§Ã£o para evento real â€” Connect PDM
 
+> NOTA (2026-10-29): este plano e um registro historico de validacao anterior a migracao Neon. As instrucoes Supabase e fotografias de outubro nao descrevem o runtime atual. Para configuracao, migrations e transferencia ao Neon, use [MIGRACAO_NEON.md](./MIGRACAO_NEON.md). Reaproveite os cenarios operacionais apenas como criterios de homologacao depois de adapta-los ao ambiente TESTE.
+
+
 Este plano define evidÃªncias necessÃ¡rias antes de usar o Connect PDM como sistema oficial de operaÃ§Ã£o. A existÃªncia de telas, migrations ou testes unitÃ¡rios isolados nÃ£o substitui os critÃ©rios abaixo. AtÃ© aprovaÃ§Ã£o integral dos bloqueadores, usar somente em ensaio controlado e manter processo de contingÃªncia definido.
 
 ## Adendo — regras informadas conectadas ao fluxo provisório (23/10/2026)

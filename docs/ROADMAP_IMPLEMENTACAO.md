@@ -1,14 +1,16 @@
 # Connect PDM — pendências conforme auditoria
 
+> NOTA (2026-10-29): este roadmap registra uma etapa anterior a migracao Neon. As referencias Supabase abaixo sao historicas; nao aplique migrations pelo procedimento antigo. O runtime atual e Neon. Use [MIGRACAO_NEON.md](./MIGRACAO_NEON.md) para configuracao, migrations, transferencia e homologacao.
+
 ## Atualização de implementação — publicação pública de eventos (25/10/2026)
 
 Foi adicionada uma primeira fatia do portal público de eventos. A migration `202610250021_public_event_publication.sql` cria uma fila de publicação restrita à equipe Connect, exige confirmação do parque, revisão/aprovação Connect e ação explícita de publicação. O conteúdo público usa um snapshot dos campos permitidos (nome, local, datas, categorias, premiações confirmadas e descrição), evitando expor inscrições, pagamentos, auditoria ou classificação. Retirada exige motivo e fica na auditoria Connect. A rota `/eventos` lista apenas eventos publicados de parques ativos.
 
-Para ativar este fluxo, aplique a migration 021 **depois** das migrations até `202610240020_park_name_identity.sql` no Supabase e valide os testes de RLS/RPC em ambiente de homologação. Este repositório não está conectado a um projeto Supabase; a migration não foi aplicada remotamente. A publicação de resultados/classificação continua fora do escopo e bloqueada até regulamento aprovado, motor versionado e aprovação da comissão.
+No ambiente Neon, a migration `202610250021_public_event_publication.sql` esta incluida na sequencia `neon/migrations/` e deve ser aplicada no branch TESTE com o aplicador documentado em `docs/MIGRACAO_NEON.md`. Nao use `supabase db push`. A publicacao de resultados/classificacao continua bloqueada ate regulamento aprovado, motor versionado e aprovacao da comissao.
 
-O fluxo de publicação de evento não conclui a arquitetura híbrida do produto. Continuam necessários sincronização transacional coordenador↔Supabase, resolução visual de conflitos, instalação/monitoramento do servidor local, snapshots de backup automatizados e homologação com vários dispositivos e internet interrompida/restaurada.
+O fluxo de publicacao nao conclui a arquitetura hibrida. O coordenador continua um modo local separado em SQLite e nao sincroniza automaticamente com Neon. Permanecem necessarios revisao visual de conflitos, instalacao/monitoramento do servidor local, snapshots de backup automatizados e homologacao com varios dispositivos e internet interrompida/restaurada.
 
-Status atualizado após auditoria do repositório e implementação parcial do coordenador local. “Feito” significa código e verificação local; não implica validação no parque ou no Supabase de produção.
+Status daquela rodada de auditoria; nao representa o estado atual do backend. A migracao para Neon e acompanhada em `docs/MIGRACAO_NEON.md`; ?feito? significa codigo e verificacao local, nao homologacao remota.
 
 | Etapa | Estado | Evidência/pendência principal |
 |---|---|---|

@@ -1,0 +1,20 @@
+services:
+  - type: web
+    name: connect-vaquejada-backend
+    runtime: node
+    region: virginia
+    plan: free
+    buildCommand: npm ci && npm run build:backend
+    startCommand: npm run start:backend
+    healthCheckPath: /health
+    envVars:
+      - key: DATABASE_URL
+        sync: false
+      - key: NEON_AUTH_BASE_URL
+        sync: false
+      - key: NEON_DATA_API_URL
+        sync: false
+      - key: EVENT_ACCESS_PASSWORD_SECRET
+        sync: false
+      - key: BACKEND_ALLOWED_ORIGINS
+        sync: false

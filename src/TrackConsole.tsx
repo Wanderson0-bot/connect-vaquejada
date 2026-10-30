@@ -46,10 +46,11 @@ export function TrackConsole({ event, entries, accessRole, onMessage }: { event:
   const canConfirmOrCorrect = !accessRole || accessRole === "park_manager";
   const canWriteTrack = canOperateQueue || canJudge || canConfirmOrCorrect;
   async function perform(action: TrackAction, name: string) {
-    if (!config || !operator.trim()) { onMessage("Informe o operador da pista antes de registrar ações."); return; }
+    const actingOperator = operator.trim() || (accessRole === "announcer" ? "Locutor" : "");
+    if (!config || !actingOperator) { onMessage("Informe o operador da pista antes de registrar ações."); return; }
     setBusy(true);
     try {
-      const updated = await applyTrackOperation(event.id, config, action, crypto.randomUUID(), operator.trim());
+      const updated = await applyTrackOperation(event.id, config, action, crypto.randomUUID(), actingOperator);
       setState(updated);
       onMessage(trackOperationMessage(updated.syncState, name));
     } catch (error) { onMessage(error instanceof Error ? error.message : "Não foi possível registrar a ação."); }
@@ -61,40 +62,39 @@ export function TrackConsole({ event, entries, accessRole, onMessage }: { event:
     ? entries.filter((entry) => entry.eventId === event.id && getEntryStatus(entry) === "active" && getPaymentStatus(entry) === "paid")
       .sort((a, b) => a.number - b.number)
     : [];
-  return <section className="content operational-content">
-    {accessRole === "announcer" && <div className="card form-card">
-      <div className="section-head">
-        <div>
-          <h2>Fila da locução</h2>
-          <p>Somente senhas pagas e ativas aparecem nesta visão para leitura rápida no microfone.</p>
+  if (accessRole === "announcer") {
+    const currentEntry = activeCall ? entries.find((entry) => entry.id === activeCall.entryId) : undefined;
+    const resultRace = activeRace?.status === "running" ? activeRace : undefined;
+    const announceOutcome = (outcome: "points" | "zero" | "return") => {
+      if (!resultRace) return;
+      const points = outcome === "points" ? window.prompt("Pontos anunciados pelo juiz:") : null;
+      if (outcome === "points" && (points === null || points.trim() === "" || !Number.isFinite(Number(points)) || Number(points) < 0)) return;
+      const reason = outcome === "return" ? window.prompt("Ocorrência / motivo do retorno:") : null;
+      void perform({ kind: "race.judge", raceId: resultRace.id, outcome, points: outcome === "points" ? Number(points) : undefined, occurrence: reason?.trim() || undefined }, outcome === "points" ? "Valeu o boi" : outcome === "zero" ? "Zero" : "Retorno solicitado");
+    };
+    return <section className="announcer-screen" aria-label="Painel do locutor">
+      <header className="announcer-header">
+        <img src="/Simbolo-Principal-Connect-Vaquejada.png" alt="Connect Vaquejada" />
+        <div className="announcer-live"><span><i /> AO VIVO</span><b>{event.location || event.name}</b></div>
+      </header>
+      <div className="announcer-stage">
+        <div className="announcer-rider">
+          <AnnouncerInfo label="Vaqueiro" value={currentEntry?.vaqueiro || "Aguardando chamada"} />
+          <AnnouncerInfo label="Cavalo" value={currentEntry?.horse || "—"} />
+          <AnnouncerInfo label="Equipe" value={currentEntry?.representation || "—"} />
         </div>
-        <span className="count-pill">{announcerRows.length} senhas</span>
+        <div className="announcer-ticket"><div className="announcer-ticket-label">SENHA ATUAL</div><strong>{currentEntry ? String(currentEntry.number).padStart(2,"0") : "—"}</strong><span>{resultRace ? `CORRIDA ${resultRace.raceNumber} · ${resultRace.status === "running" ? "NA PISTA" : resultRace.status}` : activeCall?.status === "called" ? "CHAMADA" : "PRÓXIMA SENHA"}</span></div>
       </div>
-      <div className="table-scroll">
-        <table>
-          <thead>
-            <tr>
-              <th>Senha</th>
-              <th>Vaqueiro</th>
-              <th>Cavalo</th>
-              <th>Representação</th>
-              <th>Categoria</th>
-            </tr>
-          </thead>
-          <tbody>
-            {announcerRows.length === 0 ? <tr><td colSpan={5} className="empty-cell">Nenhuma senha paga e ativa para locução.</td></tr> : announcerRows.map((entry) => (
-              <tr key={entry.id}>
-                <td><strong>{entry.number}</strong></td>
-                <td>{entry.vaqueiro}</td>
-                <td>{entry.horse || "—"}</td>
-                <td>{entry.representation || "—"}</td>
-                <td>{entry.category}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+      <div className="announcer-actions" aria-label="Registrar resultado anunciado">
+        <button className="announcer-success" disabled={busy || !resultRace} onClick={() => announceOutcome("points")}>VALEU O BOI</button>
+        <button className="announcer-zero" disabled={busy || !resultRace} onClick={() => announceOutcome("zero")}>ZERO</button>
+        <button className="announcer-return" disabled={busy || !resultRace} onClick={() => announceOutcome("return")}>RETORNO</button>
       </div>
-    </div>}
+      {!resultRace && <p className="announcer-hint">Os botões de resultado ficam disponíveis durante uma corrida em andamento.</p>}
+      <div className="announcer-queue"><strong>Fila de locução</strong><span>{announcerRows.length} senhas pagas e ativas</span><div>{announcerRows.slice(0, 6).map((entry) => <span key={entry.id} className={entry.id === currentEntry?.id ? "current" : ""}><b>{String(entry.number).padStart(2,"0")}</b>{entry.vaqueiro}</span>)}</div></div>
+    </section>;
+  }
+  return <section className="content operational-content">
     <div className="card form-card">
       <div className="section-head"><div><h2>Console operacional da pista</h2><p>Fila e corridas persistidas por evento no IndexedDB, com sincronização quando configurada.</p></div><span className={`count-pill status ${state?.syncState || "local"}`}>{state?.syncState === "synced" ? "Sincronizado" : state?.syncState === "conflict" ? "Conflito" : state?.syncState === "blocked" ? "Sincronização bloqueada" : state?.syncState === "pending" ? "Pendente" : "Local"}</span></div>
       {!readiness.ready && <div className="offline-warning" role="status">{readiness.reason} Distâncias podem ser registradas sem calcular pontos.</div>}
@@ -120,6 +120,7 @@ export function TrackConsole({ event, entries, accessRole, onMessage }: { event:
     <div className="card table-card"><div className="table-title"><h2>Histórico auditável</h2><span className="subtle">{state?.history.length || 0} ações</span></div><div className="table-scroll"><table><thead><tr><th>Horário</th><th>Ação</th><th>Senha</th><th>Operador</th><th>Motivo / ocorrência</th></tr></thead><tbody>{(state?.history || []).slice().reverse().map((item)=><tr key={item.id}><td>{new Date(item.occurredAt).toLocaleString("pt-BR")}</td><td>{item.action}</td><td>{entries.find((entry)=>entry.id===item.entryId)?.number ?? "—"}</td><td>{item.operator}</td><td>{item.reason || "—"}</td></tr>)}</tbody></table></div></div>
   </section>;
 }
+function AnnouncerInfo({label,value}:{label:string;value:string}) { return <div className="announcer-info"><span>{label}</span><strong>{value}</strong><i /></div>; }
 function RacePanel({race,busy,canStart,canJudge,canConfirmOrCorrect,distance,setDistance,distanceUnit,setDistanceUnit,announcedPoints,setAnnouncedPoints,bonus,applyBonus,setApplyBonus,bonusReason,setBonusReason,occurrence,setOccurrence,observation,setObservation,onAction}:{race:TrackState["races"][number];busy:boolean;canStart:boolean;canJudge:boolean;canConfirmOrCorrect:boolean;distance:string;setDistance:(v:string)=>void;distanceUnit:string;setDistanceUnit:(v:string)=>void;announcedPoints:string;setAnnouncedPoints:(v:string)=>void;bonus:NonNullable<CompetitionConfig["scoring"]>["bonus"];applyBonus:boolean;setApplyBonus:(v:boolean)=>void;bonusReason:string;setBonusReason:(v:string)=>void;occurrence:string;setOccurrence:(v:string)=>void;observation:string;setObservation:(v:string)=>void;onAction:(a:TrackAction,n:string)=>Promise<void>}) {
   return <div className="card form-card"><h2>Corrida {race.raceNumber} · {race.status}</h2>
     {race.status === "pending" && canStart && <button className="primary" disabled={busy} onClick={()=>void onAction({kind:"race.start",raceId:race.id},"Início da corrida")}>Iniciar corrida</button>}

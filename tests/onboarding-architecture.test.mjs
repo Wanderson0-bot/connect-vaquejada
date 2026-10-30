@@ -2,9 +2,9 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 
-const migration = await readFile(new URL("../supabase/migrations/202610220015_connect_pdm_operations.sql", import.meta.url), "utf8");
-const reconciliation = await readFile(new URL("../supabase/migrations/202610220016_legacy_staff_reconciliation.sql", import.meta.url), "utf8");
-const legacyPreflight = await readFile(new URL("../supabase/diagnostics/legacy_staff_migration_015_preflight.sql", import.meta.url), "utf8");
+const migration = await readFile(new URL("../neon/migrations/202610220015_connect_pdm_operations.sql", import.meta.url), "utf8");
+const reconciliation = await readFile(new URL("../neon/migrations/202610220016_legacy_staff_reconciliation.sql", import.meta.url), "utf8");
+const legacyPreflight = await readFile(new URL("../neon/diagnostics/legacy_staff_cutover_preflight.sql", import.meta.url), "utf8");
 const account = await readFile(new URL("../src/Account.tsx", import.meta.url), "utf8");
 const brazilFields = await readFile(new URL("../src/BrazilFields.tsx", import.meta.url), "utf8");
 const app = await readFile(new URL("../src/App.tsx", import.meta.url), "utf8");
@@ -15,13 +15,13 @@ const coordinatorQueueReview = await readFile(new URL("../src/CoordinatorQueueRe
 const backend = await readFile(new URL("../src/backend.ts", import.meta.url), "utf8");
 const publicSite = await readFile(new URL("../src/PublicSite.tsx", import.meta.url), "utf8");
 const coordinatorClient = await readFile(new URL("../src/coordinator.ts", import.meta.url), "utf8");
-const trackStop = await readFile(new URL("../supabase/migrations/202610220013_suspend_unvalidated_track_rpc.sql", import.meta.url), "utf8");
-const serviceStop = await readFile(new URL("../supabase/migrations/202610220014_track_service_role_stop.sql", import.meta.url), "utf8");
-const rbac = await readFile(new URL("../supabase/migrations/202610220012_individual_rbac.sql", import.meta.url), "utf8");
-const parkRegistryMigration = await readFile(new URL("../supabase/migrations/202610240019_connect_park_registry.sql", import.meta.url), "utf8");
-const parkNameIdentityMigration = await readFile(new URL("../supabase/migrations/202610240020_park_name_identity.sql", import.meta.url), "utf8");
-const publicPublicationMigration = await readFile(new URL("../supabase/migrations/202610250021_public_event_publication.sql", import.meta.url), "utf8");
-const parkCodeMigration = await readFile(new URL("../supabase/migrations/202610250022_connect_park_code.sql", import.meta.url), "utf8");
+const trackStop = await readFile(new URL("../neon/migrations/202610220013_suspend_unvalidated_track_rpc.sql", import.meta.url), "utf8");
+const serviceStop = await readFile(new URL("../neon/migrations/202610220014_track_service_role_stop.sql", import.meta.url), "utf8");
+const rbac = await readFile(new URL("../neon/migrations/202610220012_individual_rbac.sql", import.meta.url), "utf8");
+const parkRegistryMigration = await readFile(new URL("../neon/migrations/202610240019_connect_park_registry.sql", import.meta.url), "utf8");
+const parkNameIdentityMigration = await readFile(new URL("../neon/migrations/202610240020_park_name_identity.sql", import.meta.url), "utf8");
+const publicPublicationMigration = await readFile(new URL("../neon/migrations/202610250021_public_event_publication.sql", import.meta.url), "utf8");
+const parkCodeMigration = await readFile(new URL("../neon/migrations/202610250022_connect_park_code.sql", import.meta.url), "utf8");
 
 test("parque é identificado pelo nome e local e provisionamento é idempotente", () => {
   assert.match(parkNameIdentityMigration, /drop column connect_code/i);
@@ -53,7 +53,9 @@ test("criação de conta só é oferecida durante a ativação de um convite", (
   assert.doesNotMatch(account, /Criar identidade individual/);
   assert.doesNotMatch(account, /Acesso compartilhado do responsável|signInEventRole|operationalLogin/);
   assert.match(account, /invitationMode = false/);
-  assert.match(account, /invitationMode && \(/);
+  assert.match(account, /const canActivateInvitation = !connectRoute && invitationMode/);
+  assert.match(account, /if \(!register \|\| !canActivateInvitation\)/);
+  assert.match(account, /\{canActivateInvitation && \(/);
   assert.match(account, /Ativar convite/);
 });
 
@@ -180,14 +182,11 @@ test("fila offline exige adoção pelo operador e compara conflitos armazenados 
   assert.match(coordinatorQueueReview, /adoptCoordinatorReviewOperation/);
 });
 
-test("migration 015's legacy conversion risk has a read-only release preflight", () => {
-  assert.match(migration, /insert into public\.event_staff_memberships[\s\S]*join public\.events e on e\.park_id=m\.park_id/i);
-  assert.ok(migration.indexOf("Migration 015 blocked: legacy operational access needs review") < migration.indexOf("alter table public.parks alter column owner_user_id drop not null"), "015 must fail before making any schema or data changes when legacy grants exist.");
+test("the Neon legacy access cutover has a read-only release preflight", () => {
   assert.match(legacyPreflight, /READ ONLY/i);
-  assert.match(legacyPreflight, /migration_015_preflight/);
-  assert.match(legacyPreflight, /BLOCK 015: park membership is not proof of event assignment/i);
+  assert.match(legacyPreflight, /legacy_access_cutover_preflight/);
+  assert.match(legacyPreflight, /BLOCK cutover: park membership is not proof of event assignment/i);
   assert.match(legacyPreflight, /park_invitations/i);
-  assert.doesNotMatch(legacyPreflight, /operational_status/i, "preflight runs before 015 adds operational_status");
   assert.doesNotMatch(legacyPreflight.replace(/--.*$/gm, ""), /^\s*(update|delete|insert|revoke|grant)\s+/im);
 });
 
@@ -199,7 +198,7 @@ test("reconciliation snapshots do not grant or revoke, and activation needs revi
   assert.doesNotMatch(prep, /insert into public\.event_staff_memberships|update public\.(park_memberships|park_invitations|event_staff_memberships)/i);
   assert.match(prep, /'ambiguous'|proof\.evidence/i);
   assert.match(prep, /'no_destination'/i);
-  assert.match(review, /reviewed_by=auth\.uid\(\)/i);
+  assert.match(review, /reviewed_by=public\.current_app_user_id\(\)/i);
   assert.match(review, /evidence reference/i);
   assert.match(activate, /item\.classification<>'proven'/i);
   assert.match(activate, /item\.reviewed_by=auth\.uid\(\)/i);

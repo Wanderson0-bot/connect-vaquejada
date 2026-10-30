@@ -19,7 +19,7 @@ const connectRoutes = {
   platform: "/connect/plataforma",
 };
 
-const tabByArea = { office: "entries", announcer: "track", operational: "track" };
+const tabByArea = { office: "overview", announcer: "track", operational: "track" };
 
 export function operationTabForPath(pathname) {
   const normalized = pathname.length > 1 ? pathname.replace(/\/+$/, "") : pathname;
@@ -96,6 +96,8 @@ export function isPublicParkPath(pathname) {
 
 export function publicRouteForPath(pathname) {
   if (pathname === "/" || pathname === "/index.html") return { type: "home" };
+  if (pathname === "/sobre" || pathname === "/sobre/") return { type: "about" };
+  if (pathname === "/contato" || pathname === "/contato/") return { type: "contact" };
   if (pathname === "/eventos" || pathname === "/eventos/") return { type: "events" };
   const match = pathname.match(/^\/(eventos|parques)\/([^/]+)\/?$/);
   if (!match) return { type: "not-found" };
