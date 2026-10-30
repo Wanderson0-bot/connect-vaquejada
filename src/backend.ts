@@ -184,8 +184,8 @@ export async function signUp(email: string, password: string) {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ email, password, invitationToken, callbackURL: `${window.location.origin}${window.location.pathname}` }),
   });
-  const body = await response.json().catch(() => null) as { error?: string; needsEmailConfirmation?: boolean } | null;
-  if (!response.ok) throw new Error(body?.error || "Could not complete registration.");
+  const body = await response.json().catch(() => null) as { error?: unknown; message?: unknown; code?: unknown; needsEmailConfirmation?: boolean } | null;
+  if (!response.ok) throw new Error(registrationErrorMessage(body, response.status));
   const { data, error } = await authClient.getSession();
   if (error) throw error;
   return { session: await currentSession(), needsEmailConfirmation: body?.needsEmailConfirmation ?? !data?.user, existingAccount: false };
@@ -197,12 +197,37 @@ export async function registerConnectAdminAccount(name: string, email: string, p
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ registrationType: "connect_admin", name, email, password, confirmationPassword, callbackURL: `${window.location.origin}/connect` }),
   });
-  const body = await response.json().catch(() => null) as { error?: string; needsEmailConfirmation?: boolean } | null;
-  if (!response.ok) throw new Error(body?.error || "Could not complete registration.");
+  const body = await response.json().catch(() => null) as { error?: unknown; message?: unknown; code?: unknown; needsEmailConfirmation?: boolean } | null;
+  if (!response.ok) throw new Error(registrationErrorMessage(body, response.status));
   const { data, error } = await authClient.getSession();
   if (error) throw error;
   return { session: await currentSession(), needsEmailConfirmation: body?.needsEmailConfirmation ?? !data?.user };
 }
+
+function registrationErrorMessage(body: { error?: unknown; message?: unknown; code?: unknown } | null, status: number): string {
+  const code = typeof body?.code === "string" ? body.code.toUpperCase() : "";
+  const message = typeof body?.message === "string" ? body.message : "";
+  const error = typeof body?.error === "string" ? body.error : "";
+  const detail = `${code} ${message} ${error}`.toUpperCase();
+
+  if (detail.includes("USER_ALREADY_EXISTS") || detail.includes("ALREADY_EXISTS_USE_ANOTHER_EMAIL") || detail.includes("USER ALREADY EXISTS")) {
+    return "Este e-mail já possui uma conta. Entre com sua conta ou use a opção de recuperação de senha.";
+  }
+  if (detail.includes("FAILED_TO_CREATE_USER")) {
+    return "Não foi possível criar a conta. Confira os dados e tente novamente; se o problema continuar, contate o suporte.";
+  }
+  if (detail.includes("PASSWORD_TOO_SHORT")) return "A senha precisa ter pelo menos 10 caracteres.";
+  if (detail.includes("PASSWORD_TOO_LONG")) return "A senha excede o tamanho permitido. Escolha uma senha menor.";
+  if (detail.includes("INVALID_EMAIL")) return "Informe um e-mail válido.";
+
+  // API errors produced locally use `error` and are already safe Portuguese messages.
+  // Better Auth errors use `message` and `code`; translate known auth failures above.
+  if (error) return error;
+  if (message && /[áàâãéêíóôõúç]/i.test(message)) return message;
+  if (status === 422) return "O serviço de autenticação recusou o cadastro. Este e-mail pode já estar cadastrado; tente entrar ou recuperar a senha.";
+  return "Não foi possível concluir o cadastro. Confira os dados e tente novamente.";
+}
+
 export async function resendSignupConfirmation(email: string) {
   if (!authClient) throw new Error("Authentication is not configured.");
   const { error } = await authClient.sendVerificationEmail({ email, callbackURL: `${window.location.origin}${window.location.pathname}` });

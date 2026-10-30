@@ -314,6 +314,16 @@ test("Connect signup sends its scoped fields and validates confirmation", () => 
   assert.match(backendServer, /connectAdminRegistration && password !== confirmationPassword/);
 });
 
+test("signup errors expose localized Better Auth 422 reasons instead of a generic message", () => {
+  assert.match(backend, /registrationErrorMessage\(body, response\.status\)/);
+  assert.match(backend, /USER_ALREADY_EXISTS/);
+  assert.match(backend, /FAILED_TO_CREATE_USER/);
+  assert.match(backend, /Este e-mail já possui uma conta/);
+  assert.match(backend, /O serviço de autenticação recusou o cadastro/);
+  assert.match(backendServer, /response\.statusCode = authResponse\.status/);
+  assert.match(backendServer, /authResponse\.arrayBuffer\(\)/);
+});
+
 test("Connect signup is authorized by its configured email without a token, preserving park/event invitation flows", () => {
   assert.match(backendServer, /case when \$3::boolean then[\s\S]*admin_bootstrap_invitations[\s\S]*else[\s\S]*park_invitations[\s\S]*event_staff_invitations[\s\S]*end as allowed/);
   assert.match(backendServer, /lower\(i\.email\)=lower\(\$2\) and i\.consumed_at is null and i\.expires_at>now\(\)/);
