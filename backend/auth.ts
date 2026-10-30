@@ -1,6 +1,7 @@
 import { betterAuth } from "better-auth";
 import { jwt } from "better-auth/plugins";
 import { Pool } from "pg";
+import { grantBootstrapAdminAfterVerification } from "./bootstrap-admin.js";
 
 function required(name: string): string {
   const value = process.env[name]?.trim();
@@ -116,6 +117,7 @@ export const auth = betterAuth({
           } finally {
             client.release();
           }
+          await grantBootstrapAdminAfterVerification(user, pool);
         },
       },
       update: {

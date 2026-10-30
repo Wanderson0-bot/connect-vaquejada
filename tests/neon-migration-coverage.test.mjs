@@ -36,7 +36,7 @@ test("Neon migrations define the application tables and generated identities", (
     .map((name) => migrations.get(name))
     .join("\n");
   const applicationTables = tableNames(applicationMigrationsSql);
-  assert.equal(applicationTables.length, 27);
+  assert.equal(applicationTables.length, 28);
   assert.ok(applicationTables.includes("parks"));
   assert.ok(applicationTables.includes("events"));
   assert.ok(applicationTables.includes("entries"));
@@ -111,12 +111,13 @@ test("every literal Data API table call has a table or view in the Neon migratio
 
 test("Neon migration set starts with compatibility and uses Neon identity helpers", () => {
   const sorted = [...migrationFiles].sort((left, right) => left.localeCompare(right, "en"));
-  assert.equal(sorted.length, 27);
+  assert.equal(sorted.length, 28);
   assert.equal(sorted[0], "000_neon_identity_compat.sql");
   assert.ok(sorted.includes("202610250023_legacy_staff_access_cutover.sql"));
   assert.ok(sorted.includes("202610250024_harden_auth_identity_link.sql"));
-  assert.equal(sorted.at(-2), "202610300025_self_managed_better_auth.sql");
-  assert.equal(sorted.at(-1), "202610300026_copy_neon_auth_identities.sql");
+  assert.equal(sorted.at(-3), "202610300025_self_managed_better_auth.sql");
+  assert.equal(sorted.at(-2), "202610300026_copy_neon_auth_identities.sql");
+  assert.equal(sorted.at(-1), "202610300027_admin_bootstrap_invitations.sql");
   assert.doesNotMatch(migrationSql, /\bauth\.(?:users|uid\s*\(|jwt\s*\(|role\s*\()/i);
   assert.match(migrationSql, /auth\.user_id\s*\(\s*\)/i);
 });

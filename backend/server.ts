@@ -2,6 +2,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import { toNodeHandler } from "better-auth/node";
 import { auth, pool } from "./auth.js";
 import eventAccessHandler from "./event-access.js";
+import { handleBootstrapAdmin } from "./bootstrap-admin.js";
 
 const port = Number.parseInt(process.env.PORT || "10000", 10);
 const maxBodyBytes = 16 * 1024;
@@ -98,9 +99,17 @@ async function handleRegistration(request: IncomingMessage, response: ServerResp
       `select (
         exists(select 1 from public.park_invitations i where i.token_hash=extensions.digest(convert_to($1,'UTF8'),'sha256') and lower(i.email)=lower($2) and i.accepted_at is null and i.revoked_at is null and i.expires_at>now())
         or exists(select 1 from public.event_staff_invitations i where i.token_hash=extensions.digest(convert_to($1,'UTF8'),'sha256') and lower(i.email)=lower($2) and i.accepted_at is null and i.revoked_at is null and i.expires_at>now())
+        or exists(select 1 from public.admin_bootstrap_invitations i where i.token_hash=extensions.digest(convert_to($1,'UTF8'),'sha256') and lower(i.email)=lower($2) and i.consumed_at is null and i.expires_at>now())
       ) as allowed`, [invitationToken, email],
     );
     if (!invited.rows[0]?.allowed) return sendJson(response, 403, { error: "O convite é inválido, expirou ou pertence a outro email." });
+    await pool.query(
+      `update public.admin_bootstrap_invitations
+          set registration_started_at=coalesce(registration_started_at,now())
+        where token_hash=extensions.digest(convert_to($1,'UTF8'),'sha256')
+          and lower(email)=lower($2) and consumed_at is null and expires_at>now()`,
+      [invitationToken, email],
+    );
     const authHeaders = new Headers({
       "content-type": "application/json",
       origin: String(request.headers.origin || callbackOrigin),
@@ -174,6 +183,15 @@ const server = createServer(async (request, response) => {
       return;
     }
     await handleRegistration(request, response);
+    return;
+  }
+  if (pathname === "/api/bootstrap-admin") {
+    if (request.method === "OPTIONS") {
+      response.statusCode = 204;
+      response.end();
+      return;
+    }
+    await handleBootstrapAdmin(request, response, pool);
     return;
   }
   if (pathname !== "/api/event-access") {

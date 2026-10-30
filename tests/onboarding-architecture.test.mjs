@@ -22,6 +22,30 @@ const parkRegistryMigration = await readFile(new URL("../neon/migrations/2026102
 const parkNameIdentityMigration = await readFile(new URL("../neon/migrations/202610240020_park_name_identity.sql", import.meta.url), "utf8");
 const publicPublicationMigration = await readFile(new URL("../neon/migrations/202610250021_public_event_publication.sql", import.meta.url), "utf8");
 const parkCodeMigration = await readFile(new URL("../neon/migrations/202610250022_connect_park_code.sql", import.meta.url), "utf8");
+const bootstrap = await readFile(new URL("../backend/bootstrap-admin.ts", import.meta.url), "utf8");
+const authService = await readFile(new URL("../backend/auth.ts", import.meta.url), "utf8");
+const backendServer = await readFile(new URL("../backend/server.ts", import.meta.url), "utf8");
+
+test("bootstrap administrativo exige segredo e bloqueia acesso não autorizado antes do banco", () => {
+  assert.match(bootstrap, /ADMIN_BOOTSTRAP_SECRET/);
+  assert.match(bootstrap, /timingSafeEqual/);
+  assert.match(bootstrap, /if \(!equalSecret\(candidate, secret\)\) return sendJson\(response, 404/);
+  assert.ok(bootstrap.indexOf("if (!equalSecret(candidate, secret))") < bootstrap.indexOf("const client = await pool.connect()"));
+});
+
+test("bootstrap administrativo serializa criação e impede reutilização após existir administrador", () => {
+  assert.match(bootstrap, /pg_advisory_xact_lock\(hashtext\('connect:first-admin-bootstrap'\)\)/);
+  assert.match(bootstrap, /state\.rows\[0\]\?\.admin_exists/);
+  assert.match(bootstrap, /O administrador inicial já foi configurado/);
+  assert.match(bootstrap, /consumed_at=now\(\),consumed_by=/);
+});
+
+test("cadastro bootstrap continua pelo Better Auth e o admin só é concedido após confirmar email", () => {
+  assert.match(backendServer, /admin_bootstrap_invitations i where i\.token_hash/);
+  assert.match(backendServer, /api\/auth\/sign-up\/email/);
+  assert.match(authService, /grantBootstrapAdminAfterVerification\(user, pool\)/);
+  assert.match(bootstrap, /if \(!user\.emailVerified\) return/);
+});
 
 test("parque é identificado pelo nome e local e provisionamento é idempotente", () => {
   assert.match(parkNameIdentityMigration, /drop column connect_code/i);
