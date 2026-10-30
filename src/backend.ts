@@ -11,7 +11,7 @@ const eventAccessApiUrl = backendUrl;
 export const authProjectRef = "Connect Vaquejada";
 export const backendConfigured = Boolean(backendUrl && dataApiUrl);
 const authClient = backendUrl ? createAuthClient({
-  baseURL: window.location.origin,
+  baseURL: backendUrl,
   basePath: "/api/auth",
   fetchOptions: { credentials: "include" },
   plugins: [jwtClient()],
@@ -179,7 +179,7 @@ export async function signUp(email: string, password: string) {
   if (!authClient || !backendUrl) throw new Error("Authentication is not configured.");
   const invitationToken = localStorage.getItem("connect-pdm-pending-invitation") ||
     localStorage.getItem("connect-pdm-pending-event-invitation") || "";
-  const response = await fetch(`${window.location.origin}/api/register`, {
+  const response = await fetch(`${backendUrl}/api/register`, {
     method: "POST", credentials: "include",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ email, password, invitationToken, callbackURL: `${window.location.origin}${window.location.pathname}` }),
