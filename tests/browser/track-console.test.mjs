@@ -183,8 +183,8 @@ test("Edge production UI: public home and anonymous protected-route denial", { t
   const isolatedConfigPath = join(profilePath, "vite.config.ts");
   await mkdir(isolatedEnvDir);
   await writeFile(isolatedConfigPath, [
-    `import baseConfig from ${JSON.stringify(pathToFileURL(join(projectRoot, "vite.config.ts")).href)};`,
-    `export default { ...baseConfig, root: ${JSON.stringify(projectRoot)}, envDir: ${JSON.stringify(isolatedEnvDir)}, build: { ...baseConfig.build, outDir: ${JSON.stringify(isolatedBuildDir)}, emptyOutDir: true } };`,
+    `import baseConfigFactory from ${JSON.stringify(pathToFileURL(join(projectRoot, "vite.config.ts")).href)};`,
+    `export default async (environment) => { const baseConfig = await baseConfigFactory(environment); return { ...baseConfig, root: ${JSON.stringify(projectRoot)}, envDir: ${JSON.stringify(isolatedEnvDir)}, build: { ...baseConfig.build, outDir: ${JSON.stringify(isolatedBuildDir)}, emptyOutDir: true } }; };`,
     "",
   ].join("\n"), "utf8");
   const previewEnv = { ...process.env, VITE_NEON_DATA_API_URL: "", VITE_BACKEND_API_URL: "" };
