@@ -14,6 +14,8 @@ services:
         sync: false
       - key: BETTER_AUTH_SECRET
         sync: false
+      - key: ADMIN_BOOTSTRAP_SECRET
+        sync: false
       - key: RESEND_API_KEY
         sync: false
       - key: AUTH_EMAIL_FROM

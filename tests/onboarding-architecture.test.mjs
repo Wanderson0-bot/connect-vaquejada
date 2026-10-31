@@ -28,6 +28,13 @@ const bootstrap = await readFile(new URL("../backend/bootstrap-admin.ts", import
 const authService = await readFile(new URL("../backend/auth.ts", import.meta.url), "utf8");
 const selfManagedAuthMigration = await readFile(new URL("../neon/migrations/202610300025_self_managed_better_auth.sql", import.meta.url), "utf8");
 const backendServer = await readFile(new URL("../backend/server.ts", import.meta.url), "utf8");
+const renderConfig = await readFile(new URL("../render.yaml", import.meta.url), "utf8");
+
+test("Render declares the protected first-admin bootstrap secret", () => {
+  assert.match(renderConfig, /- key: ADMIN_BOOTSTRAP_SECRET\s+sync: false/);
+  assert.match(bootstrap, /ADMIN_BOOTSTRAP_SECRET/);
+  assert.match(backendServer, /pathname === "\/api\/bootstrap-admin"/);
+});
 
 test("Better Auth generates a non-null user ID before INSERT for PostgreSQL text keys", () => {
   assert.match(authService, /import \{ randomUUID \} from "node:crypto"/);
